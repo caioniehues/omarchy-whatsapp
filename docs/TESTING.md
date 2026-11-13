@@ -212,7 +212,9 @@ exit, stalled readers, process argv/environment inspection, old-binary refusal
 and exact account scope through lock handoff. The synthetic MCP recorder now
 reads the same stdin protocol. `private_wacli_smoke.py BINARY` exercises the real
 patched dependency with read-only dispatch and no account store or network
-access. It checks the `omawhatsapp.3` build label and, through a synthetic sync
+access. It checks the `omawhatsapp.4` build label, that commands and flags added
+after wacli 0.19 (contact saves, bounded read marks) refuse with only the fixed
+text, including under `--events`, and, through a synthetic sync
 delegate (a held lock and socket in an empty temporary store), the fixed
 not-sent, outcome-unknown and generic private-mode messages.
 `test_private_build.py` runs a copy of the builder against generated patches and
@@ -222,15 +224,15 @@ recorded, in the C locale and again under a translated locale (German or Brazili
 Portuguese; only that case is skipped where git has no message catalogs, as in a
 minimal container), and a patch that does not apply must fail with git's
 untranslated report.
-The CI private-transport job first confirms that `wacli-send-queue.patch` is
-byte-for-byte upstream `git diff b87e6178 7c1b3bfb -- cmd/wacli`, then builds the
-three bundled patches against the exact audited upstream commit, runs plain/FTS
+The CI private-transport job builds the two bundled patches against the exact
+audited upstream commit (wacli v0.26.0), runs plain/FTS
 dependency tests, a `-race` run of the
 queue, read-mark and outcome tests and vet, and publishes every patch digest.
 The dependency's own regressions are upstream's `send_queue_deadline_test.go`
-and OmaWhatsApp's `TestOmaReadMarkDoesNotBlockSend`,
-`TestOmaReceiptReadMarkStaysInSendQueue`, `TestOmaExpiredQueuedSendIsNotDispatched`
-and `TestOmaPrivate*`/`TestOma*Reports*` outcome tests.
+and `retry_uncertainty_test.go`, and OmaWhatsApp's `TestOmaReadMarkDoesNotBlockSend`,
+`TestOmaReceiptReadMarkStaysInSendQueue`, `TestOmaExpiredQueuedSendIsNotDispatched`,
+`TestOmaPrivate*`/`TestOma*Reports*` outcome tests and
+`TestFailedGroupLookupKeepsStoredSubject`.
 
 Deadlines and outcomes are tested above the dependency too. In
 `test_backend_hardening.py`, fake private builds that ignore `--timeout` and

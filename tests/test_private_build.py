@@ -87,7 +87,7 @@ class PrivateBuildTests(unittest.TestCase):
         for path, lines in self.files.items():
             (self.source / path).parent.mkdir(parents=True, exist_ok=True)
             (self.source / path).write_text("".join(line + "\n" for line in lines))
-        for _, name, _, sentinels in self.constants["PATCHES"]:
+        for _, name, sentinels in self.constants["PATCHES"]:
             (self.checkout / "dependencies" / name).write_text(self.synthetic_patch(name, sentinels))
         self.install_stand_ins()
         # Build inside an enclosing repository, where an unguarded git apply
@@ -179,7 +179,7 @@ else:
     def assert_every_patch_built(self, result: subprocess.CompletedProcess) -> None:
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         evidence = json.loads(self.provenance.read_text())
-        for key, name, _, _ in self.constants["PATCHES"]:
+        for key, name, _ in self.constants["PATCHES"]:
             data = (self.checkout / "dependencies" / name).read_bytes()
             self.assertEqual(evidence[key], hashlib.sha256(data).hexdigest(), name)
         self.assertEqual(evidence["extension"], self.constants["EXTENSION"])

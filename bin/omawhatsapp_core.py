@@ -2423,7 +2423,7 @@ class Backend:
         return supported
 
     def _private_transport_build(self) -> str:
-        """The private build's label, such as omawhatsapp.3; empty if older."""
+        """The private build's label, such as omawhatsapp.4; empty if older."""
         if not self._private_transport_supported():
             return ""
         probe = getattr(self, "_private_transport_probe", None)

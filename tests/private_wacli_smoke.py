@@ -12,7 +12,7 @@ import time
 binary=Path(sys.argv[1]).resolve()
 secret="SYNTHETIC private Grüße 世界\nsecond line"
 cap=json.loads(subprocess.check_output([str(binary),"--private-args-version"],text=True))
-assert cap=={"protocol":1,"max_bytes":65536,"build":"omawhatsapp.3"}
+assert cap=={"protocol":1,"max_bytes":65536,"build":"omawhatsapp.4"}
 child=subprocess.Popen([str(binary),"--private-args-stdin"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 # Child waits for EOF before dispatch, giving a deterministic inspection point.
 try:
@@ -28,6 +28,16 @@ finally:
 for payload in [b"[",b"[]",b" "+b"x"*65536,b'["--private-args-stdin"]']:
  result=subprocess.run([str(binary),"--private-args-stdin"],input=payload,capture_output=True,timeout=5)
  assert result.returncode!=0
+# Commands and flags added after wacli 0.19 take private values the same way;
+# refusals, including --events output, carry only the fixed text.
+with tempfile.TemporaryDirectory() as tmp:
+ for command in (["contacts","save","--account-wide","--jid","15550000000","--name",secret],
+                 ["chats","mark-read","--chat","123@s.whatsapp.net","--through-message-id",secret],
+                 ["--events","messages","edit","--chat","123@s.whatsapp.net","--id","SYNTHETIC","--message",secret]):
+  args=["--read-only","--json","--store",str(Path(tmp)/"store"),*command]
+  result=subprocess.run([str(binary),"--private-args-stdin"],input=json.dumps(args).encode(),capture_output=True,timeout=10)
+  assert result.returncode!=0 and secret.encode() not in result.stdout+result.stderr,command
+  assert json.loads(result.stderr)["error"]=="Private WhatsApp command failed.",result.stderr
 child=subprocess.Popen([str(binary),"--private-args-stdin"],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
 started=time.monotonic()
 try:

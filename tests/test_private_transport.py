@@ -71,6 +71,7 @@ class PrivateTransportTests(unittest.TestCase):
    backend=core.Backend(store_dir=root/'store',state_dir=root/'state',wacli=binary,account_config=root/'none')
    cases=[('{"protocol":1,"max_bytes":65536}',''),
           ('{"protocol":1,"max_bytes":65536,"build":"omawhatsapp.3"}','omawhatsapp.3'),
+          ('{"protocol":1,"max_bytes":65536,"build":"omawhatsapp.4"}','omawhatsapp.4'),
           ('{"protocol":1,"max_bytes":65536,"build":"<synthetic label>"}','')]
    for index,(capability,label) in enumerate(cases):
     binary.write_text("#!/bin/sh\necho '"+capability+"'\n");binary.chmod(0o700);os.utime(binary,ns=(1,10**18+index))
