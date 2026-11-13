@@ -653,6 +653,8 @@ MAX_SENT_REPLY_STATE = 2 * 1024 * 1024
 PREFERENCES_VERSION = 4
 MAX_NOTIFY_BURST = 5
 MAX_NOTIFY_SUMMARY = 96
+MAX_LAUNCHER_CHATS = 500
+MAX_LAUNCHER_NAME = 120
 MAX_NOTIFY_SENDER = 48
 # A name to sign messages with, per account: one line, no formatting marks.
 MAX_SIGNATURE_NAME = 40
@@ -4602,19 +4604,55 @@ class Backend:
         action = words[-1] if words and not words[-1].isdigit() else ""
         if action != "default" or not str(target.get("jid") or ""):
             return closed
+        opened = self._open_chat_in_shell(
+            "openDropdown" if ui_preference(self._preferences(), "notify_reply") else "openApp",
+            str(target.get("account") or ""), str(target["jid"]))
+        return {"ok": True, "kind": "notify-open", "opened": opened is not None}
+
+    def _open_chat_in_shell(
+        self, surface: str, account: str, jid: str
+    ) -> subprocess.CompletedProcess[Any] | None:
+        """Ask the running shell to open one chat; None when it cannot be asked.
+
+        The chat crosses as a one-use handoff token, so neither its JID nor its
+        account ever appears in a process argument list.
+        """
         shell = OMARCHY_SHELL if OMARCHY_SHELL.exists() else Path(shutil.which("omarchy-shell") or "")
         if not str(shell) or not shell.exists():
-            return {"ok": True, "kind": "notify-open", "opened": False}
-        token = self.prepare_handoff("notification", {
-            "account": str(target.get("account") or ""), "jid": str(target["jid"])})
-        payload = json.dumps({"handoff": token})
-        surface = "openDropdown" if ui_preference(self._preferences(), "notify_reply") else "openApp"
+            return None
+        token = self.prepare_handoff("notification", {"account": account, "jid": jid})
         try:
-            run_bounded([str(shell), PLUGIN_ID, surface, payload], timeout=10,
-                        stdout_limit=4096, stderr_limit=4096)
+            return run_bounded([str(shell), PLUGIN_ID, surface, json.dumps({"handoff": token})],
+                               timeout=10, stdout_limit=4096, stderr_limit=4096)
         except (ProcessOutputLimitExceeded, subprocess.TimeoutExpired, OSError):
-            return {"ok": True, "kind": "notify-open", "opened": False}
-        return {"ok": True, "kind": "notify-open", "opened": True}
+            return None
+
+    def launcher_chats(self, limit: int = MAX_LAUNCHER_CHATS) -> list[str]:
+        """One line per chat for an external launcher: name, account, JID.
+
+        Tab-separated, newest first, with the name reduced to one printable
+        line so a chat name can never forge a column or another row.
+        """
+        limit = max(1, min(int(limit), MAX_LAUNCHER_CHATS))
+        lines = []
+        for chat in self.chats("", limit)["chats"]:
+            name = "".join(c if c.isprintable() else " " for c in str(chat.get("name") or ""))
+            name = " ".join(name.split())[:MAX_LAUNCHER_NAME] or "WhatsApp chat"
+            lines.append(f"{name}\t{chat.get('account') or ''}\t{chat['jid']}")
+        return lines
+
+    def launcher_open(self, line: str) -> dict[str, Any]:
+        """Open the chat named by one line that launcher_chats printed."""
+        fields = line.removesuffix("\n").split("\t")
+        if len(fields) != 3 or "\n" in fields[2]:
+            raise OmaWhatsAppError("Choose one chat line printed by launcher-chats.")
+        account = self.use_account(fields[1])
+        chat = self._chat(fields[2])
+        result = self._open_chat_in_shell("openApp", account.name, chat["jid"])
+        if result is None or result.returncode != 0 \
+                or str(result.stdout or "").strip() != "ok":
+            raise OmaWhatsAppError("The Omarchy shell did not open OmaWhatsApp; is it running?")
+        return {"ok": True, "kind": "launcher-open", "opened": True}
 
     def set_notifications(self, enabled: Any = None, preview: Any = None,
                           sound: Any = None) -> dict[str, Any]:
@@ -8169,6 +8207,9 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("settings")
     commands.add_parser("avatars")
     commands.add_parser("capabilities")
+    launcher_chats = commands.add_parser("launcher-chats")
+    launcher_chats.add_argument("--limit", type=int, default=MAX_LAUNCHER_CHATS)
+    commands.add_parser("launcher-open")
     transport = commands.add_parser("wacli")
     transport.add_argument("--interactive", action="store_true")
     transport.add_argument("--authorize", default="")
@@ -8258,6 +8299,20 @@ def main() -> int:
             return emit(backend.capabilities())
         if args.command == "update-check":
             return emit(backend.update_check())
+        # Launcher rows are plain lines for a picker, so failures go to stderr.
+        if args.command == "launcher-chats":
+            try:
+                lines = backend.launcher_chats(args.limit)
+            except OmaWhatsAppError as exc:
+                print(clean_error(exc, "OmaWhatsApp could not list chats."), file=sys.stderr)
+                return 1
+            sys.stdout.write("".join(line + "\n" for line in lines))
+            return 0
+        if args.command == "launcher-open":
+            raw = sys.stdin.buffer.read(4097)
+            if len(raw) > 4096:
+                raise OmaWhatsAppError("Choose one chat line printed by launcher-chats.")
+            return emit(backend.launcher_open(raw.decode("utf-8", errors="replace")))
         payload = request()
         # Every request may name the account it belongs to. Empty keeps a
         # preserved root session stable, then falls back to wacli's default.

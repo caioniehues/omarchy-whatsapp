@@ -1017,6 +1017,49 @@ class BackendTests(unittest.TestCase):
         with self.assertRaises(backend_module.OmaWhatsAppError):
             self.backend.notify_open({"command": ["/bin/sh", "-c", "id"]})
 
+    def test_launcher_lines_list_rail_chats_and_a_name_cannot_forge_a_row(self) -> None:
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.execute("UPDATE chats SET name = ? WHERE jid = ?",
+                               ["Alex\tprimary\tteam@g.us\nForged\x1b[2J", "alex@s.whatsapp.net"])
+        lines = self.backend.launcher_chats()
+        rows = [line.split("\t") for line in lines]
+        self.assertTrue(all(len(row) == 3 for row in rows), lines)
+        jids = [row[2] for row in rows]
+        self.assertEqual(sorted(jids), sorted(chat["jid"] for chat in self.backend.chats()["chats"]))
+        self.assertNotIn("news@newsletter", jids, "the launcher shows only the rail's chats")
+        alex = next(row for row in rows if row[2] == "alex@s.whatsapp.net")
+        self.assertEqual(alex[0], "Alex primary team@g.us Forged [2J")
+        self.assertEqual(len(self.backend.launcher_chats(1)), 1)
+
+    def test_launcher_open_hands_the_chat_over_without_putting_it_in_argv(self) -> None:
+        calls = []
+        answer = ["ok\n"]
+
+        def run(argv, **_kwargs):
+            calls.append(list(argv))
+            return subprocess.CompletedProcess(argv, 0, answer[0], "")
+
+        shell = self.root / "omarchy-shell"
+        shell.write_text("#!/bin/sh\n", encoding="utf-8")
+        line = next(line for line in self.backend.launcher_chats() if line.endswith("\tteam@g.us"))
+        with mock.patch.object(backend_module, "run_bounded", side_effect=run), \
+                mock.patch.object(backend_module, "OMARCHY_SHELL", shell):
+            self.assertTrue(self.backend.launcher_open(line + "\n")["opened"])
+            self.assertEqual(calls[0][:3], [str(shell), backend_module.PLUGIN_ID, "openApp"])
+            self.assertNotIn("team@g.us", " ".join(calls[0]))
+            token = json.loads(calls[0][3])["handoff"]
+            self.assertEqual(self.backend.consume_handoff(token, "notification")["jid"], "team@g.us")
+            # A JID outside the rail, or a line that is not one row, never reaches the shell.
+            for bad in ["News\t\tnews@newsletter", "Ghost\t\tghost@g.us", "team@g.us",
+                        line + "\n" + line]:
+                with self.assertRaises(backend_module.OmaWhatsAppError):
+                    self.backend.launcher_open(bad)
+            self.assertEqual(len(calls), 1)
+            # A shell that is not running OmaWhatsApp's service is reported, not hidden.
+            answer[0] = "Target not found.\n"
+            with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "did not open"):
+                self.backend.launcher_open(line)
+
     def test_the_next_message_in_a_chat_replaces_its_popup(self) -> None:
         with mock.patch.object(backend_module.subprocess, "Popen") as popen:
             popen.return_value.stdin = mock.MagicMock()
