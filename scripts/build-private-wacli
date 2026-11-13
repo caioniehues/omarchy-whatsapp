@@ -13,16 +13,15 @@ import subprocess
 import tarfile
 import tempfile
 
-BASE = "b87e6178b7b1e571ce2821ab516039cfa0c6ecf6"
-EXTENSION = "omawhatsapp.3"
+BASE = "535a8b969cc83c3aad57f66be77e8fd4a7fcaaa3"
+EXTENSION = "omawhatsapp.4"
 # Applied in this order. Each digest covers exactly the bytes given to git
 # apply, and sentinels prove that patch's changes are in the built tree.
 PATCHES = (
- ("patch_sha256","wacli-private-input.patch",["--unidiff-zero"],
-  (("cmd/wacli/private_args.go","privateArgsFlag"),("internal/wa/contacts.go","chatNameFallback"))),
- ("send_queue_patch_sha256","wacli-send-queue.patch",[],
-  (("cmd/wacli/send_ipc.go","sendDelegateReplyMargin"),("cmd/wacli/send_queue_deadline_test.go","TestProductionServerDropsQueuedSendAfterCallerTimeout"))),
- ("outcomes_patch_sha256","wacli-omawhatsapp-outcomes.patch",[],
+ ("patch_sha256","wacli-private-input.patch",
+  (("cmd/wacli/private_args.go","privateArgsFlag"),("internal/wa/contacts.go","chatNameFallback"),
+   ("internal/app/omawhatsapp_group_name_test.go","TestFailedGroupLookupKeepsStoredSubject"))),
+ ("outcomes_patch_sha256","wacli-omawhatsapp-outcomes.patch",
   (("cmd/wacli/omawhatsapp_outcomes.go",'"build":"'+EXTENSION+'"'),("cmd/wacli/send_ipc.go","delegateBypassRefusal"))),
 )
 # Delegated queue, read-mark and outcome regressions, also run under -race.
@@ -35,9 +34,9 @@ parser.add_argument("--provenance",type=Path,help="Write source, toolchain and o
 args=parser.parse_args()
 source=args.source.resolve();destination=args.output.resolve()
 head=subprocess.check_output(["git","-C",str(source),"rev-parse","HEAD"],text=True).strip()
-if head!=BASE:raise SystemExit("Expected the audited wacli 0.19.0 commit "+BASE)
+if head!=BASE:raise SystemExit("Expected the audited wacli 0.26.0 commit "+BASE)
 patch_dir=Path(__file__).resolve().parents[1]/"dependencies"
-patches=[(key,name,flags,sentinels,(patch_dir/name).read_bytes()) for key,name,flags,sentinels in PATCHES]
+patches=[(key,name,sentinels,(patch_dir/name).read_bytes()) for key,name,sentinels in PATCHES]
 with tempfile.TemporaryDirectory(prefix="omawhatsapp-wacli-") as temp:
  root=Path(temp)
  archive=root/"source.tar"
@@ -49,9 +48,9 @@ with tempfile.TemporaryDirectory(prefix="omawhatsapp-wacli-") as temp:
  # Its report is checked below, so keep its messages untranslated.
  git_env={k:v for k,v in os.environ.items() if k not in ("GIT_DIR","GIT_WORK_TREE","GIT_INDEX_FILE","LANGUAGE")}
  git_env["GIT_CEILING_DIRECTORIES"]=str(root.parent);git_env["LC_ALL"]="C"
- for key,name,flags,sentinels,data in patches:
+ for key,name,sentinels,data in patches:
   files={line.split()[-1].split("/",1)[1] for line in data.decode().splitlines() if line.startswith("diff --git ")}
-  result=subprocess.run(["git","apply","--verbose",*flags,"-"],input=data,cwd=root,env=git_env,capture_output=True)
+  result=subprocess.run(["git","apply","--verbose","-"],input=data,cwd=root,env=git_env,capture_output=True)
   report=(result.stdout+result.stderr).decode(errors="replace")
   applied=set(re.findall(r"(?m)^Applied patch (.+) cleanly\.$",report))
   if result.returncode!=0 or "Skipped patch" in report or applied!=files:
@@ -72,7 +71,7 @@ with tempfile.TemporaryDirectory(prefix="omawhatsapp-wacli-") as temp:
  import shutil
  shutil.copyfile(root/"wacli",destination);destination.chmod(0o755)
  evidence={"upstream_commit":BASE,"source_archive_sha256":source_digest,"extension":EXTENSION,
-  **{key:hashlib.sha256(data).hexdigest() for key,_,_,_,data in patches},
+  **{key:hashlib.sha256(data).hexdigest() for key,_,_,data in patches},
   "binary_sha256":hashlib.sha256(destination.read_bytes()).hexdigest(),
   "go_version":subprocess.check_output(["go","version"],cwd=root,env=env,text=True).strip(),
   "cc_version":subprocess.check_output(["cc","--version"],text=True).splitlines()[0],

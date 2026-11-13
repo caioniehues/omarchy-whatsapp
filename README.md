@@ -213,8 +213,10 @@ OmaWhatsApp is independent and not affiliated with WhatsApp or Meta.
 ### Private command transport
 
 From 0.18.1, sending, editing, captions and other mutation commands require the
-OmaWhatsApp privacy-enabled **wacli 0.19.0** build. It keeps private command
-arguments in a bounded stdin pipe instead of the Unix process command line.
+OmaWhatsApp privacy-enabled **wacli** build, now based on **wacli 0.26.0**. It
+keeps private command arguments in a bounded stdin pipe instead of the Unix
+process command line, for every command and flag, including those wacli added
+after 0.19.
 This includes sensitive read-only searches, profile/media lookups,
 presence and terminal authentication, not only writes.
 This is a small maintained extension of upstream wacli, not an upstream release.
@@ -222,21 +224,23 @@ An ordinary older binary still supports direct local SQLite reads; the app refus
 operations with an upgrade message and never falls back to exposed arguments.
 
 Build and install from the [pinned source and bundled patches](dependencies/README.md#build-and-install):
-the private input patch, an exact backport of upstream wacli's send-queue
-deadline fix, and a small OmaWhatsApp outcomes patch (extension `omawhatsapp.3`).
+the private input patch and a small OmaWhatsApp outcomes patch (extension
+`omawhatsapp.4`). Upstream's send-queue deadline fix, which earlier builds
+carried as a backport, is part of wacli 0.26.0.
 Prebuilt downloads from earlier releases are not offered for installation: their
 published hashes establish byte integrity but do not independently establish
 that those bytes were built from the reviewed source. The source builder and CI
 record input and output digests for audit; the supported installation route
 builds the executable locally.
 
-Restart the app after upgrading. When you rebuild wacli for OmaWhatsApp 0.19.0,
-also restart background sync, because a running sync keeps the old binary's send
+Restart the app after upgrading. After rebuilding wacli, also restart background
+sync, because a running sync keeps the old binary's send
 queue: `systemctl --user restart wacli-sync.service`, plus each running
 `wacli-sync@<account>.service` for named accounts. Settings → About then shows
-`omawhatsapp.3` next to the wacli version. A send that WhatsApp did not confirm
-in time is marked as possibly sent, never retried automatically. No relinking,
-account migration or chat-store change is required. Package-manager upgrades replacing wacli with an ordinary
+`omawhatsapp.4` next to the wacli version. Earlier private builds
+(`omawhatsapp.3` and unlabelled ones) keep working. A send that WhatsApp did not confirm
+in time is marked as possibly sent, never retried automatically. No relinking
+is required; wacli updates its own local store on first start. Package-manager upgrades replacing wacli with an ordinary
 upstream build will safely disable these operations until the private build is
 restored. No binary is downloaded or installed automatically by the app.
 

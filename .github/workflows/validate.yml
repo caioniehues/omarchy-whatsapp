@@ -74,26 +74,15 @@ jobs:
     container: archlinux:base
     steps:
       - name: Install build prerequisites
-        run: pacman -Syu --noconfirm diffutils git go gcc python shadow util-linux
+        run: pacman -Syu --noconfirm git go gcc python shadow util-linux
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - name: Check out audited dependency source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           repository: openclaw/wacli
-          ref: b87e6178b7b1e571ce2821ab516039cfa0c6ecf6
+          ref: 535a8b969cc83c3aad57f66be77e8fd4a7fcaaa3
           path: .wacli-source
-      - name: Confirm the send-queue patch is upstream wacli #456, unmodified
-        shell: bash
-        working-directory: .wacli-source
-        run: |
-          upstream=7c1b3bfbeb26b929ca60e3cbae1511ad9c58a02d
-          git fetch --no-tags --depth=2 origin "$upstream"
-          test "$(git rev-parse "$upstream^")" = b87e6178b7b1e571ce2821ab516039cfa0c6ecf6
-          # The documented check from dependencies/README.md, with git's default diff settings.
-          GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -c safe.directory='*' \
-            diff b87e6178b7b1e571ce2821ab516039cfa0c6ecf6 "$upstream" -- cmd/wacli \
-            | cmp - <(sed -n '/^diff --git /,$p' ../dependencies/wacli-send-queue.patch)
-      - name: Test and build the private wacli extension from its three bundled patches
+      - name: Test and build the private wacli extension from its two bundled patches
         run: |
           # Permission regressions must run as an ordinary Unix account.
           useradd --create-home --uid 1001 oma-ci
