@@ -10,15 +10,15 @@ Evidence sources:
 
 - **Web** — authenticated WhatsApp Web behavior, inspected without copying
   private conversation content.
-- **Transport** — wacli 0.19.0 command help and the live local-store schema
-  (minimum accepted release: 0.17.1).
+- **Transport** — wacli 0.26.0 command help and the live local-store schema
+  (minimum accepted release: 0.24.0; 0.23 is skipped for wacli #501).
 - **App** — the private OmaWhatsApp worktree, installed Omarchy plugin, and
   rendered runtime checks.
 
 ## Agent transport parity
 
-The shared `$omawhatsapp` skill and helper account for all 104 command leaves
-in wacli 0.19.0. This is separate from graphical parity: channels, calls,
+The shared `$omawhatsapp` skill and helper account for all 111 command leaves
+in wacli 0.26.0. This is separate from graphical parity: channels, calls,
 Communities, profiles, accounts, and maintenance remain absent from the visual
 chat rail, but agents can perform them after the exact current request passes
 the operation's local-read, remote-read, local-write, sync, WhatsApp-write,
@@ -106,7 +106,10 @@ button must remain reachable at every supported size.
 | Buttons/list rows | `messages.buttons` | building |
 | Contact card | payload not normalized by wacli | transport gap |
 | Link preview card | wacli sends previews; mirror lacks normalized card | transport gap |
-| Delivery/read receipts | `message_status` in wacli builds that keep receipts (fork `oma-presence-receipts`); official wacli has none, so no tick is shown | building |
+| Delivery/read receipts | `message_status` in the OmaWhatsApp build, else official wacli 0.21+ `message_receipts` (a group is delivered/read only once every other known member is) | building |
+| Contact online / last seen | only the OmaWhatsApp build: official 0.21+ `presence subscribe` gets no answer while the sync runs `--presence-mode quiet`, and the app will not show you online all day to make it answer; with Show me online on, the header says presence needs the OmaWhatsApp build. Typing from the sync's `--events` stream is not read, so contacts' activity never reaches the journal | building |
+| Full-history pairing | onboarding option, off by default: `auth --full-history --history-days N --history-size-mb M` | building |
+| Re-download missing voice notes | Settings → Media: `media retry --type audio --limit 96`, sync-class, the sync yields and restarts | building |
 | Disappearing timer state | send flag exists; chat timer state not exposed | transport gap |
 | Native image/GIF/video gallery | local media path | building |
 | External image annotation | optional Omasnap CLI | done |
@@ -157,7 +160,9 @@ the message belongs to the selected chat before crossing the helper boundary.
 | GIF search/provider | no provider exposed | transport gap |
 
 The helper rejects remote URLs, non-absolute paths, empty files, files over
-100 MB, and batches over 10 before sending anything. If the network fails in
+2048 MB (100 MB on wacli 0.24, which lacks `send file --max-size-mb`), and
+batches over 10 before sending anything. Files over 100 MB carry their own
+`--max-size-mb` and a longer upload deadline. If the network fails in
 the middle of a validated batch, the error reports the exact sent count so the
 remaining selection can be recovered rather than silently duplicated.
 

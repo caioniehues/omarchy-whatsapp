@@ -102,12 +102,20 @@ them keeps the chat list warm in the resident service.
   Existing private-reading choices are preserved during upgrades.
 - Marking read syncs only your own devices by default. **Send read receipts
   to contacts** is a separate per-account opt-in for automatic reading, replies
-  and manual mark-read. It requires wacli 0.19.0+ and follows WhatsApp privacy
+  and manual mark-read. It follows WhatsApp privacy
   settings; a successful dispatch does not guarantee blue ticks.
-- Ticks for what you send (sent, delivered, read) and a contact's online, last
-  seen and typing need a wacli that records them; see
+- Ticks for what you send (sent, delivered, read) come from the receipts wacli
+  0.21+ keeps; a group message turns blue only once every other member read
+  it. A message with no stored receipt shows no tick rather than a guessed one.
+- A contact's online, last seen and typing need the OmaWhatsApp wacli build
+  and Settings → Reading → Show me online; with an official wacli the header
+  says so. See
   [wacli: official and richer builds](../README.md#wacli-official-and-richer-builds).
-  Without it no tick is shown rather than a guessed one.
+- Linking from the first-run screen can ask the phone for older history
+  (Bring older history, off by default) within a day and size limit.
+- Settings → Media → Re-download missing voice notes asks the phone to send
+  again voice notes that expired from WhatsApp's servers; sync pauses meanwhile.
+- Files up to 2048 MB go out with wacli 0.25 or newer (100 MB with 0.24).
 
 ## Notifications and the bar badge
 
