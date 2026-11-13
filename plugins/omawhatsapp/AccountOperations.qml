@@ -18,7 +18,11 @@ Item {
   property string linkTarget: ""
   property int linkPolls: 0
   readonly property bool linkBusy: linkPhase !== "idle"
-  readonly property bool busy: linkBusy || avatarBusy
+  // Settings → Media → Re-download missing voice notes (wacli media retry
+  // --type audio): the sync pauses while the phone re-uploads them.
+  property bool voiceRetryBusy: false
+  property string voiceRetryMessage: ""
+  readonly property bool busy: linkBusy || avatarBusy || voiceRetryBusy
 
   signal refreshRequested()
 
@@ -32,33 +36,51 @@ Item {
       helper, "link-token", String(token)]
   }
 
-  // The main account links with wacli's own auth: a terminal shows the QR
-  // code, and the sync starts once the phone has scanned it.
-  function mainLinkCommand() {
-    return ["/usr/bin/xdg-terminal-exec", "--title=OmaWhatsApp · Link WhatsApp", "--hold", "--",
-      helper, "wacli", "--interactive", "--authorize", "interactive", "--", "auth"]
+  // wacli auth flags for an opt-in full-history link (wacli 0.21+); none
+  // unless history.full is true. The helper checks the same bounds again.
+  function historyArgs(history) {
+    if (!history || history.full !== true) return []
+    var args = ["--full-history"]
+    var days = Number(history.days || 0)
+    var size = Number(history.size_mb || 0)
+    if (!(Number.isInteger(days) && days >= 0 && days <= 3650)
+        || !(Number.isInteger(size) && size >= 0 && size <= 16384)) return null
+    if (days > 0) args.push("--history-days", String(days))
+    if (size > 0) args.push("--history-size-mb", String(size))
+    return args
   }
 
-  function linkMainAccount(name) {
-    if (busy) return false
+  // The main account links with wacli's own auth: a terminal shows the QR
+  // code, and the sync starts once the phone has scanned it.
+  function mainLinkCommand(history) {
+    return ["/usr/bin/xdg-terminal-exec", "--title=OmaWhatsApp · Link WhatsApp", "--hold", "--",
+      helper, "wacli", "--interactive", "--authorize", "interactive", "--", "auth"]
+      .concat(historyArgs(history) || [])
+  }
+
+  function linkMainAccount(name, history) {
+    if (busy || historyArgs(history) === null) return false
     linkPhase = "running"
     linkTarget = String(name || "primary")
     linkPolls = 0
     statusMessage = "Scan the QR code in the terminal with your phone"
-    linkProcess.command = mainLinkCommand()
+    linkProcess.command = mainLinkCommand(history)
     linkProcess.running = true
     linkPoll.restart()
     return true
   }
 
-  function linkAccount(name) {
+  function linkAccount(name, history) {
     var value = String(name || "").trim()
-    if (busy || value === "") return false
+    if (busy || value === "" || historyArgs(history) === null) return false
     linkPhase = "running"
     linkTarget = value
     linkPolls = 0
     statusMessage = "Finish linking " + value + " in the terminal"
-    prepareLinkProcess.payload = JSON.stringify({name: value, authorization: "interactive"})
+    var request = {name: value, authorization: "interactive"}
+    if (history && history.full === true)
+      request.history = {full: true, days: Number(history.days || 0), size_mb: Number(history.size_mb || 0)}
+    prepareLinkProcess.payload = JSON.stringify(request)
     prepareLinkProcess.stdinEnabled = true
     prepareLinkProcess.running = true
     return true
@@ -157,6 +179,33 @@ Item {
     refreshRequested()
   }
 
+  function retryVoiceNotes(account) {
+    if (busy) return false
+    voiceRetryBusy = true
+    voiceRetryMessage = "Asking your phone for missing voice notes…"
+    voiceRetryProcess.payload = JSON.stringify({ authorization: "sync", account: String(account || "") })
+    voiceRetryProcess.stdinEnabled = true
+    voiceRetryProcess.running = true
+    return true
+  }
+
+  function finishVoiceRetry(exitCode, stdoutText, stderrText) {
+    voiceRetryBusy = false
+    var response = parseJson(stdoutText)
+    if (exitCode !== 0 || !response || response.ok !== true) {
+      voiceRetryMessage = (response && response.error)
+        || String(stderrText || "Voice notes could not be re-downloaded.").trim()
+      return
+    }
+    var recovered = Math.max(0, Number(response.recovered || 0))
+    var requested = Math.max(0, Number(response.requested || 0))
+    var gone = Math.max(0, Number(response.not_on_phone || 0))
+    voiceRetryMessage = requested === 0 ? "No voice notes are missing"
+      : String(recovered) + " of " + String(requested) + " voice notes re-downloaded"
+        + (gone > 0 ? "; " + String(gone) + " are no longer on your phone" : "")
+    refreshRequested()
+  }
+
   onAccountsChanged: reconcileLink()
 
   Timer {
@@ -216,6 +265,19 @@ Item {
     onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
     onExited: function(exitCode) {
       root.finishAvatarRefresh(exitCode, avatarOutput.text, avatarError.text)
+    }
+  }
+
+  Process {
+    id: voiceRetryProcess
+    property string payload: ""
+    command: [root.helper, "retry-voice-notes"]
+    stdinEnabled: true
+    stdout: StdioCollector { id: voiceRetryOutput }
+    stderr: StdioCollector { id: voiceRetryError }
+    onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
+    onExited: function(exitCode) {
+      root.finishVoiceRetry(exitCode, voiceRetryOutput.text, voiceRetryError.text)
     }
   }
 }

@@ -31,6 +31,15 @@ TestCase {
     compare(PresenceModel.line(null, alice, { now: now }).text, "")
   }
 
+  function test_an_official_wacli_says_presence_needs_the_build() {
+    // Only when the user asked to see presence; groups never show online.
+    compare(PresenceModel.line(null, alice, { now: now, unsupported: true }).text,
+      "online status needs the OmaWhatsApp wacli build")
+    compare(PresenceModel.line(null, group, { now: now, group: true, unsupported: true }).text, "")
+    compare(PresenceModel.line(null, alice, { now: now, unsupported: false }).text, "")
+    compare(PresenceModel.line(snapshot({}), "", { now: now, unsupported: true }).text, "")
+  }
+
   function test_a_person_typing_online_or_last_seen() {
     var typing = {}
     typing[alice] = {}

@@ -5,7 +5,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-7aa2f7"></a>
   <img alt="Omarchy 4 Quattro" src="https://img.shields.io/badge/Omarchy-4%20Quattro-7aa2f7">
-  <img alt="wacli 0.17.1 or newer" src="https://img.shields.io/badge/wacli-0.17.1%2B-7aa2f7">
+  <img alt="wacli 0.24.0 or newer" src="https://img.shields.io/badge/wacli-0.24.0%2B-7aa2f7">
 </p>
 
 ![OmaWhatsApp: the full app and the bar dropdown](preview.png)
@@ -49,7 +49,7 @@ whether it starts with the system.
 
 **Private by design.** No account, server or telemetry of its own. Reading a
 chat sends no sender receipt by default. A separate per-account opt-in
-requests receipts with wacli 0.19.0+; WhatsApp privacy settings still apply. Screenshots and tests use synthetic demo data
+requests receipts; WhatsApp privacy settings still apply. Screenshots and tests use synthetic demo data
 only. See [privacy](docs/PRIVACY.md).
 
 **Ready for your agent.** An agent skill and an MCP server with 46 tools let
@@ -96,10 +96,11 @@ The first time the app opens it walks you through the rest:
    from WhatsApp → Linked devices on the phone.
 
 **Requirements.** Omarchy 4 (Quattro) and
-[wacli](https://github.com/openclaw/wacli) 0.17.1 or newer (tested with
-0.17.1, 0.18.3 and 0.19.0). The AUR `wacli-bin` package installs the official
+[wacli](https://github.com/openclaw/wacli) 0.24.0 or newer (tested with
+0.24.0, 0.25.1 and 0.26.0; 0.23 is skipped for its archive-recovery bug,
+wacli #501). The AUR `wacli-bin` package installs the official
 release used by the read-compatibility tests. Linking your phone, sending and
-other mutations require the accompanying privacy-enabled 0.19.0 build; onboarding
+other mutations require the accompanying privacy-enabled build; onboarding
 says so before opening the QR code terminal. A wacli of your own at
 `~/.local/bin/wacli` is used first. Choosing files to attach needs `zenity`,
 which the app offers to install the first time it is missing. Everything else
@@ -141,11 +142,21 @@ optional extras need additional wacli features; the app detects those separately
 | Local chats, cached media, notifications, several accounts | ✓ | ✓ |
 | Sending, edits and other mutations | Privacy extension required | Privacy extension required |
 | Showing the contact that you are typing | ✓ | ✓ |
-| Ticks for sent, delivered and read | no tick shown | ✓ |
-| A contact's online, last seen and typing | not shown | ✓ |
+| Ticks for sent, delivered and read | ✓ (from the receipts wacli 0.21+ keeps) | ✓ |
+| A contact's online, last seen and typing | not shown¹ | ✓ |
+| Files up to 2048 MB, replies quoting a file, voice note or sticker | Privacy extension required | ✓ when built on wacli 0.25+ (100 MB on 0.24) |
+| Full-history pairing, re-downloading missing voice notes | Privacy extension required | ✓ |
 | Starring messages | hidden | ✓ |
 | `@` on chats whose unread messages mention you | not shown | ✓ |
 | Forwarding and deleting without pausing sync | pauses sync for a few seconds | ✓ |
+
+¹ Official wacli 0.21+ can subscribe to a contact's presence, but WhatsApp
+only answers a device shown online. The app's background sync stays quiet
+(`--presence-mode quiet`) so you never show online while the app is closed,
+and official wacli has no way to show online only while the app has focus.
+With Show me online on, the app says presence needs the OmaWhatsApp build
+instead of showing you online all day; it does not read typing from wacli's
+`--events` stream either, which would put contacts' activity in the journal.
 
 ## Let your agent use WhatsApp
 
@@ -163,7 +174,7 @@ what", "what attachments did Bruno send this month", "reply to Carlos that I
 am on my way", "tag these five as suppliers and tell each of them we are
 closed tomorrow".
 
-Both are fail-closed. Each of wacli's 104 operations is classified as a local
+Both are fail-closed. Each of wacli's 111 operations is classified as a local
 read, remote read, local write, sync, WhatsApp write, destructive or
 interactive action; local reads run read-only, and everything else needs your
 request. Tools that change WhatsApp are marked so the client asks you first
@@ -193,7 +204,7 @@ through. Details in the
 
 The release gate runs helper, setup, agent and offscreen QML tests, a simulated `omarchy plugin add` into an empty home,
 manifest validation, QML lint and shell checks. CI runs it against wacli
-0.17.1, 0.18.3 and 0.19.0.
+0.24.0, 0.25.1 and 0.26.0.
 
 ## Credits
 

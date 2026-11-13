@@ -14,10 +14,11 @@ oma="$HOME/.local/bin/omawhatsapp"
 "$oma" capabilities
 ```
 
-It accounts for every command leaf in wacli 0.19.0 and accepts 0.17.1 or
-newer; `wacli_minimum_version` and `wacli_parity_version` in the output say
-which, and each operation carries the `min_wacli` release it first appeared
-in. Before an advanced operation, inspect its flags without changing state:
+It accounts for every command leaf in wacli 0.26.0 and accepts 0.24.0 or
+newer (0.23 is skipped for its archive-recovery bug, wacli #501);
+`wacli_minimum_version` and `wacli_parity_version` in the output say which,
+and each operation carries the `min_wacli` release it first appeared in.
+Before an advanced operation, inspect its flags without changing state:
 
 ```bash
 wacli <command> <subcommand> --help
@@ -142,8 +143,10 @@ restores it afterward. It never overrides OmaWhatsApp's explicit offline mode.
 `accounts add NAME` links the way the app's Link does: the helper writes the
 account (pausing the root account's sync, which holds the account list's lock,
 for that write alone), shows the QR code, and starts the new account's sync.
-Auth flags such as `--phone` or `--qr-format` pass through; `--account` and
-`--store` do not apply.
+Auth flags such as `--phone`, `--qr-format`, `--full-history`,
+`--history-days` and `--history-size-mb` pass through; `--account` and
+`--store` do not apply. Ask for full history only when the user wants older
+messages on this computer: it takes longer and uses more disk.
 
 ## High-impact boundaries
 
@@ -154,7 +157,15 @@ Auth flags such as `--phone` or `--qr-format` pass through; `--account` and
   that account, helper mark-read requests sender-facing receipts. The raw wacli
   `--receipts` flag also requests them. Both remain WhatsApp writes and require
   explicit user authorization; never enable the setting or send a receipt as
-  a test without it. Treat presence as visible activity.
+  a test without it. Treat presence as visible activity: the app's own
+  presence and typing calls never run while Settings → Show me online is off.
+- `contacts save` (wacli 0.24) renames a contact on the user's WhatsApp
+  account and phone; it needs `whatsapp-write`, an exact locally indexed
+  `--jid`, and wacli's own `--account-wide` consent. Add `--phonebook` only
+  when the user asks to change the phone's address book too.
+- `chats mark-read --through-message-id` must name a message already stored
+  in that exact chat. `contacts resolve` and `messages changes` read local
+  state only.
 - Status broadcasts, profile changes, group/channel membership and admin
   changes, logout, account removal, revoke/delete/purge, and cleanup require
   exact current authorization and no automatic retry.

@@ -117,12 +117,14 @@ Rectangle {
         checked: value("readOnReply", true), busy: busy },
       { kind: "toggle", key: "sender_read_receipts",
         title: "Send read receipts to contacts",
-        subtitle: "Off by default. Applies whenever you mark a chat read, including automatic reading and replies. Requires wacli 0.19.0 or newer; WhatsApp privacy settings still apply."
+        subtitle: "Off by default. Applies whenever you mark a chat read, including automatic reading and replies. WhatsApp privacy settings still apply."
           + (multi ? " Applies to the account of the open chat." : ""),
         checked: value("senderReadReceipts", false), busy: busy },
       { kind: "toggle", key: "show_online",
         title: "Show me online while OmaWhatsApp has focus",
-        subtitle: "Needed to see who is online, their last seen, and who is typing: WhatsApp only sends them to a device shown online. It also shows the chat when you are typing or recording a voice note. Needs a wacli build that follows presence.",
+        subtitle: value("presenceSupported", true) === false
+          ? "Shows the chat when you are typing or recording a voice note. Seeing who is online, their last seen and who is typing needs the OmaWhatsApp wacli build; this wacli cannot follow presence."
+          : "Needed to see who is online, their last seen, and who is typing: WhatsApp only sends them to a device shown online. It also shows the chat when you are typing or recording a voice note. Seeing presence needs the OmaWhatsApp wacli build.",
         checked: value("showOnline", true), busy: busy },
       { kind: "note",
         text: "With sender read receipts off, marking a chat read only syncs your phone and linked devices. Turning them on requests receipts for stored unread incoming messages; it does not guarantee blue ticks." }
@@ -186,7 +188,13 @@ Rectangle {
           subtitle: operations && operations.statusMessage ? operations.statusMessage
             : "Checks the most recent chats for new photos. Sync pauses for up to 20 seconds.",
           button: operations && operations.avatarBusy ? "Refreshing…" : "Refresh",
-          available: live && !!operations && !operations.avatarBusy && !operations.linkBusy }
+          available: live && !!operations && !operations.avatarBusy && !operations.linkBusy },
+        { kind: "action", key: "retry_voice_notes", title: "Re-download missing voice notes",
+          subtitle: operations && operations.voiceRetryMessage ? operations.voiceRetryMessage
+            : "Asks your phone to send again voice notes that can no longer be downloaded. Sync pauses while it runs, up to a few minutes; the phone must be online."
+              + (multi ? " Applies to the account of the open chat." : ""),
+          button: operations && operations.voiceRetryBusy ? "Re-downloading…" : "Re-download",
+          available: live && !offline && !!operations && !operations.busy }
       ]
     }
     if (section === "sync") {
@@ -258,7 +266,7 @@ Rectangle {
       { kind: "info", title: "OmaWhatsApp", value: (about.app_version || "—") + (about.install_mode ? " · " + about.install_mode : "") },
       { kind: "info", title: "wacli", value: (about.wacli_version || "—")
           + (about.wacli_build ? " · " + about.wacli_build : "") + " · supports "
-          + (about.wacli_minimum_version || "0.17.1") + " and newer, tested with " + (about.wacli_tested_version || "0.18.3") },
+          + (about.wacli_minimum_version || "0.24.0") + " and newer, tested with " + (about.wacli_tested_version || "0.26.0") },
       { kind: "info", title: "Source", value: "github.com/caioniehues/omarchy-whatsapp" },
       { kind: "note", text: "Settings live in a private preferences file on this device. Chats stay in wacli's local mirror; nothing here sends chat data anywhere." }
     ]
@@ -321,6 +329,8 @@ Rectangle {
     case "auto_download_media": return service.setAutoDownloadMedia(next)
     case "online": return service.setOnline(next)
     case "refresh_avatars": return service.accountOperations.refreshAvatars()
+    case "retry_voice_notes":
+      return service.accountOperations.retryVoiceNotes(String(service.selectedChatAccount || ""))
     case "agents": return service.runSetup(next, false)
     case "remove_setup":
       if (!removeConfirming) { removeConfirming = true; return false }

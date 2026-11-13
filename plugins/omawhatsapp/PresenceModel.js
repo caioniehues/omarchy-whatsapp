@@ -1,12 +1,18 @@
 .pragma library
 .import "TimeFormat.js" as TimeFormat
 
-// Presence snapshot that wacli builds following presence keep in each store
+// Presence snapshot that the OmaWhatsApp wacli build keeps in each store
 // (presence.json): who is online, when they were last seen, who is typing.
 // Official wacli writes none, so every function answers "nothing known".
+// Official 0.21+ can subscribe to presence, but WhatsApp answers only a
+// device shown online, and the app's sync stays quiet unless the build can
+// show it online just while the app has focus.
 
 // A typing indicator never followed by "paused" stops after this, as on the phone.
 var TYPING_TTL = 25
+// Said where online/last seen would be when the user asked to see presence
+// but this wacli cannot follow it.
+var UNSUPPORTED_TEXT = "online status needs the OmaWhatsApp wacli build"
 
 function parse(text) {
   var value
@@ -53,11 +59,15 @@ function lastSeenLabel(timestamp, now, clockPattern) {
 
 // The line under the chat name. `live` asks for the accent color (typing).
 // options: { now: seconds, date: Date for "today", clock: pattern,
-//            group: bool, names: { jid: name } }
+//            group: bool, names: { jid: name },
+//            unsupported: the user wants presence this wacli cannot follow }
 function line(snapshot, chatJid, options) {
   var settings = options || ({})
   var empty = { text: "", live: false }
-  if (!snapshot || String(chatJid || "") === "") return empty
+  if (String(chatJid || "") === "") return empty
+  if (settings.unsupported === true)
+    return settings.group === true ? empty : { text: UNSUPPORTED_TEXT, live: false }
+  if (!snapshot) return empty
   var typers = typingIn(snapshot, chatJid, settings.now)
   if (typers.length > 0) {
     var recording = typers.every(function(item) { return item.media === "audio" })

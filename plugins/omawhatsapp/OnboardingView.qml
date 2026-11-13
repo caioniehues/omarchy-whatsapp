@@ -32,10 +32,23 @@ Rectangle {
   }
   readonly property bool linking: !!operations && operations.linkBusy === true
   property bool allowAgents: !!service && service.setupAgents === true
+  // Opt-in: ask the phone for older history while pairing (wacli 0.21+),
+  // within a day and a size limit. Off, the phone sends its recent window.
+  property bool fullHistory: false
+  property int historyDays: 365
+  property int historySizeMb: 2048
+  readonly property var historyDayChoices: [
+    { label: "90 days", value: 90 }, { label: "1 year", value: 365 },
+    { label: "3 years", value: 1095 }, { label: "All", value: 0 }]
+  readonly property var historySizeChoices: [
+    { label: "512 MB", value: 512 }, { label: "2 GB", value: 2048 },
+    { label: "8 GB", value: 8192 }, { label: "Phone decides", value: 0 }]
+  readonly property var historyRequest: fullHistory
+    ? { full: true, days: historyDays, size_mb: historySizeMb } : null
 
   function startLink() {
     if (demoMode || !service || !operations || privateBuildNeeded) return false
-    return operations.linkMainAccount(service.defaultAccountName)
+    return operations.linkMainAccount(service.defaultAccountName, historyRequest)
   }
 
   color: background
@@ -422,6 +435,98 @@ Rectangle {
                 color: root.foreground
                 font.family: root.fontFamily
                 font.pixelSize: Style.font.bodySmall
+              }
+            }
+          }
+          Item {
+            width: parent.width
+            height: Math.max(historySwitch.height, historyText.implicitHeight)
+            Column {
+              id: historyText
+              anchors.left: parent.left
+              anchors.right: historySwitch.left
+              anchors.rightMargin: Style.space(12)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                text: "Bring older history"
+                color: root.foreground
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+              }
+              Text {
+                textFormat: Text.PlainText
+                width: parent.width
+                wrapMode: Text.Wrap
+                text: "Off: the phone sends its recent messages. On: it sends up to the limits below, which takes longer and uses more space here."
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+            ToggleSwitch {
+              id: historySwitch
+              objectName: "onboardingFullHistory"
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              checked: root.fullHistory
+              foreground: root.foreground
+              accent: root.accent
+              onToggled: if (!root.linking) root.fullHistory = !checked
+            }
+          }
+          Repeater {
+            model: root.fullHistory ? [
+              { name: "historyDays", title: "How far back", choices: root.historyDayChoices },
+              { name: "historySize", title: "At most", choices: root.historySizeChoices }] : []
+            delegate: Flow {
+              id: historyGroup
+              required property var modelData
+              width: stepsColumn.width
+              spacing: Style.space(6)
+              Text {
+                textFormat: Text.PlainText
+                width: Style.space(96)
+                height: Style.space(28)
+                verticalAlignment: Text.AlignVCenter
+                text: modelData.title
+                color: root.dim
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Repeater {
+                model: modelData.choices
+                delegate: Rectangle {
+                  id: historyChip
+                  required property var modelData
+                  readonly property string group: String(historyGroup.modelData.name)
+                  readonly property bool selected: group === "historyDays"
+                    ? root.historyDays === modelData.value : root.historySizeMb === modelData.value
+                  objectName: group + "-" + modelData.value
+                  width: chipLabel.implicitWidth + Style.space(20)
+                  height: Style.space(28)
+                  radius: height / 2
+                  color: selected ? root.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
+                  Text {
+                    textFormat: Text.PlainText
+                    id: chipLabel
+                    anchors.centerIn: parent
+                    text: historyChip.modelData.label
+                    color: historyChip.selected ? root.background : root.foreground
+                    font.family: root.fontFamily
+                    font.pixelSize: Style.font.caption
+                  }
+                  HoverHandler { cursorShape: Qt.PointingHandCursor }
+                  TapHandler {
+                    enabled: !root.linking
+                    onTapped: {
+                      if (historyChip.group === "historyDays") root.historyDays = historyChip.modelData.value
+                      else root.historySizeMb = historyChip.modelData.value
+                    }
+                  }
+                }
               }
             }
           }

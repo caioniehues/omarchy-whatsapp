@@ -887,7 +887,8 @@ Item {
     var now = root.service.presenceNow
     return PresenceModel.line(root.service.presenceSnapshotFor(root.selectedAccount), root.currentJid(), {
       now: now, date: new Date(now * 1000), group: root.displayKind === "group", names: names,
-      clock: TimeFormat.clockPattern(root.timeFormat, Qt.locale().timeFormat(Locale.ShortFormat))
+      clock: TimeFormat.clockPattern(root.timeFormat, Qt.locale().timeFormat(Locale.ShortFormat)),
+      unsupported: root.service.showOnline === true && root.service.presenceSupported === false
     })
   }
   function chatTyping(chat) {

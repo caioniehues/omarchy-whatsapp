@@ -21,8 +21,9 @@ private voice-draft paths, OGG/Opus validation, exact-chat/reply voice sends,
 failed-send retention, confirmed-send cleanup, voice state labels,
 demo isolation, explicit receipt commands, persistent
 offline write blocking, muted/archive badge suppression, mute-deadline
-normalization, the lock-free live-delegate path, exact coverage of all 108
-wacli 0.19.0 command leaves, authorization-class enforcement, global-flag
+normalization, the lock-free live-delegate path, exact coverage of all 111
+wacli 0.26.0 command leaves, receipt-derived ticks, Show-me-online presence
+gating, the 2048 MiB send cap, authorization-class enforcement, global-flag
 isolation, false-valued Boolean authorization flags, dry-run downgrades,
 interactive restrictions, bounded parallel account probes, compensating
 service rollback, and a fake-wacli end-to-end JSON invocation. The release script

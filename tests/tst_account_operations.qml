@@ -23,6 +23,40 @@ TestCase {
     ])
   }
 
+  function test_full_history_is_opt_in_and_bounded() {
+    var operations = createTemporaryObject(operationsComponent, testCase)
+    var base = ["/usr/bin/xdg-terminal-exec", "--title=OmaWhatsApp · Link WhatsApp", "--hold", "--",
+      "/synthetic/omawhatsapp", "wacli", "--interactive", "--authorize", "interactive", "--", "auth"]
+    compare(operations.mainLinkCommand(null), base, "an ordinary link asks for nothing more")
+    compare(operations.mainLinkCommand({ full: false, days: 30 }), base)
+    compare(operations.mainLinkCommand({ full: true, days: 365, size_mb: 2048 }),
+      base.concat(["--full-history", "--history-days", "365", "--history-size-mb", "2048"]))
+    compare(operations.mainLinkCommand({ full: true, days: 0, size_mb: 0 }),
+      base.concat(["--full-history"]), "0 leaves that limit to the phone")
+    // Out of range never becomes a link that asks for everything.
+    verify(!operations.linkMainAccount("primary", { full: true, days: -1, size_mb: 0 }))
+    verify(!operations.linkAccount("work", { full: true, days: 30, size_mb: 1e9 }))
+    verify(!operations.linkBusy)
+  }
+
+  function test_voice_note_redownload_reports_what_the_phone_sent() {
+    var operations = createTemporaryObject(operationsComponent, testCase)
+    operations.linkPhase = "running"
+    verify(!operations.retryVoiceNotes("work"), "one sync-pausing operation at a time")
+    operations.linkPhase = "idle"
+    operations.voiceRetryBusy = true
+    operations.finishVoiceRetry(0, JSON.stringify({ ok: true, requested: 5, recovered: 3,
+      not_on_phone: 2, no_response: 0, failed: 0 }), "")
+    verify(!operations.voiceRetryBusy)
+    compare(operations.voiceRetryMessage,
+      "3 of 5 voice notes re-downloaded; 2 are no longer on your phone")
+    operations.finishVoiceRetry(0, JSON.stringify({ ok: true, requested: 0 }), "")
+    compare(operations.voiceRetryMessage, "No voice notes are missing")
+    operations.finishVoiceRetry(1, JSON.stringify({ ok: false,
+      error: "Offline mode is on. Go online to re-download voice notes." }), "")
+    compare(operations.voiceRetryMessage, "Offline mode is on. Go online to re-download voice notes.")
+  }
+
   function test_authenticated_discovery_wins_over_a_late_terminal_exit() {
     var operations = createTemporaryObject(operationsComponent, testCase)
     operations.linkPhase = "running"
