@@ -3436,6 +3436,78 @@ class BackendTests(unittest.TestCase):
         with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "your own"):
             self.backend.delete_status("mine")
 
+    def test_reading_statuses_never_runs_wacli_so_no_receipt_is_sent(self) -> None:
+        self._add_status_table()
+        with mock.patch.object(backend_module, "run_bounded") as run:
+            self.assertEqual(len(self.backend.statuses()["statuses"]), 2)
+            self.assertEqual(len(self.backend.statuses(all_accounts=True)["statuses"]), 2)
+        run.assert_not_called()
+
+    def test_statuses_are_capped_and_name_their_account(self) -> None:
+        self._add_status_table()
+        now = int(time.time())
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.executemany(
+                "INSERT INTO status_messages (msg_id, ts, from_me, sender_jid, text, media_type, mime_type) "
+                "VALUES (?, ?, 0, 'member@s.whatsapp.net', '', 'image', 'image/jpeg')",
+                [(f"bulk{index}", now - 300 - index) for index in range(300)])
+        statuses = self.backend.statuses()["statuses"]
+        self.assertEqual(len(statuses), backend_module.Backend.MAX_STATUSES)
+        self.assertEqual(statuses[0]["id"], "mine", "the newest are the ones kept")
+        self.assertEqual({item["account"] for item in statuses}, {self.backend.active.name})
+        self.assertEqual(statuses[-1]["mime_type"], "image/jpeg")
+
+    def _star(self, rows: list[tuple]) -> None:
+        """(chat, id, ts, from_me, text, starred_at[, revoked]) rows, each starred."""
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            for chat, message_id, ts, from_me, text, starred_at, *revoked in rows:
+                connection.execute(
+                    """INSERT OR IGNORE INTO messages
+                    (chat_jid, msg_id, sender_jid, sender_name, ts, from_me, text, revoked)
+                    VALUES (?, ?, 'member@s.whatsapp.net', 'Sam', ?, ?, ?, ?)""",
+                    [chat, message_id, ts, from_me, text, 1 if revoked else 0])
+                connection.execute("INSERT INTO starred VALUES (?, ?, '', ?, ?)",
+                                   [chat, message_id, from_me, starred_at])
+
+    def test_starred_messages_of_every_chat_newest_star_first(self) -> None:
+        self._star([("team@g.us", "t1", 30, 0, "", 100),
+                    ("alex@s.whatsapp.net", "a1", 40, 1, "", 300),
+                    ("news@newsletter", "n1", 50, 0, "channel post", 400),
+                    ("community@g.us", "c1", 48, 0, "community announcement", 500),
+                    ("team@g.us", "gone", 22, 0, "deleted for everyone", 600, True)])
+        result = self.backend.starred_messages()
+        self.assertEqual([(item["chat_jid"], item["id"]) for item in result["starred"]],
+                         [("alex@s.whatsapp.net", "a1"), ("team@g.us", "t1")],
+                         "channels, Community chats and deleted messages are left out")
+        first, second = result["starred"]
+        self.assertEqual((first["chat_name"], first["sender"], first["text"]), ("Alex", "You", "hello"))
+        self.assertEqual((second["chat_name"], second["sender"], second["text"]),
+                         ("Design team", "Sam", "ship it"))
+        self.assertEqual(second["sender_jid"], "member@s.whatsapp.net")
+        self.assertEqual(first["account"], self.backend.active.name)
+        only_team = self.backend.starred_messages("team@g.us")["starred"]
+        self.assertEqual([item["id"] for item in only_team], ["t1"])
+        with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "not available"):
+            self.backend.starred_messages("news@newsletter")
+        with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "not both"):
+            self.backend.starred_messages("team@g.us", all_accounts=True)
+
+    def test_starred_list_is_bounded(self) -> None:
+        self._star([("team@g.us", f"bulk{index}", 1000 + index, 0, f"note {index}", 2000 + index)
+                    for index in range(520)])
+        self.assertEqual(len(self.backend.starred_messages(limit=10 ** 9)["starred"]),
+                         backend_module.Backend.MAX_STARRED)
+        newest = self.backend.starred_messages(limit=2)["starred"]
+        self.assertEqual([item["id"] for item in newest], ["bulk519", "bulk518"])
+        self.assertEqual(len(self.backend.starred_messages(limit=-5)["starred"]), 1)
+        self.assertEqual(len(self.backend.starred_messages(limit="many")["starred"]), 200)
+
+    def test_starred_on_a_mirror_without_the_table(self) -> None:
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.execute("DROP TABLE starred")
+        self.assertEqual(self.backend.starred_messages()["starred"], [])
+        self.assertEqual(self.backend.starred_messages("team@g.us")["starred"], [])
+
     def test_a_shared_contact_becomes_a_card_with_the_known_person(self) -> None:
         # The owner shared a contact and saw "Contact: Name (+55 ...)" as text.
         self._insert("alex@s.whatsapp.net", "c1", 50, from_me=1,
@@ -3891,6 +3963,47 @@ sys.exit(0)
         rail = self.backend.chats()["chats"]
         self.assertEqual(sum(chat["notification_unread"] for chat in rail), 0)
         self.assertEqual(sum(chat["unread"] for chat in rail), 11)
+
+    def _star_in(self, store: Path, chat: str, message_id: str, starred_at: int) -> None:
+        with closing(sqlite3.connect(store / "wacli.db")) as connection, connection:
+            connection.execute("INSERT INTO starred VALUES (?, ?, '', 0, ?)",
+                               [chat, message_id, starred_at])
+
+    def test_starred_stays_inside_the_requested_account(self) -> None:
+        self._star_in(self.work, "shared@s.whatsapp.net", "m-shared@s.whatsapp.net", 5)
+        self._star_in(self.work, "team@g.us", "m-team@g.us", 6)
+        self._star_in(self.home, "family@g.us", "m-family@g.us", 7)
+        merged = self.backend.starred_messages(all_accounts=True)
+        self.assertEqual([(item["account"], item["chat_jid"]) for item in merged["starred"]],
+                         [("home", "family@g.us"), ("work", "team@g.us"),
+                          ("work", "shared@s.whatsapp.net")])
+        self.backend.use_account("home")
+        self.assertEqual([item["chat_jid"] for item in self.backend.starred_messages()["starred"]],
+                         ["family@g.us"], "without all_accounts only the selected account")
+        self.assertEqual(self.backend.starred_messages("shared@s.whatsapp.net")["starred"], [],
+                         "the same chat in the other account has its own stars")
+        with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "not available"):
+            self.backend.starred_messages("team@g.us")
+
+    def test_an_unreadable_account_never_empties_starred_or_statuses(self) -> None:
+        self._star_in(self.work, "team@g.us", "m-team@g.us", 6)
+        with closing(sqlite3.connect(self.work / "wacli.db")) as connection, connection:
+            connection.execute("""CREATE TABLE status_messages (
+                rowid INTEGER PRIMARY KEY AUTOINCREMENT, msg_id TEXT NOT NULL UNIQUE,
+                ts INTEGER NOT NULL, from_me INTEGER NOT NULL, sender_jid TEXT, sender_name TEXT,
+                text TEXT, media_type TEXT, media_caption TEXT, filename TEXT, mime_type TEXT)""")
+            connection.execute("INSERT INTO status_messages (msg_id, ts, from_me, sender_jid, text) "
+                               "VALUES ('w1', ?, 0, 'shared@s.whatsapp.net', 'work status')",
+                               [int(time.time()) - 60])
+        (self.home / "wacli.db").unlink()
+        for result, key in ((self.backend.starred_messages(all_accounts=True), "starred"),
+                            (self.backend.statuses(all_accounts=True), "statuses")):
+            self.assertEqual({item["account"] for item in result[key]}, {"work"})
+            report = {row["account"]: row for row in result["accounts"]}
+            self.assertFalse(report["home"]["ready"])
+        self.backend.use_account("home")
+        with self.assertRaises(backend_module.OmaWhatsAppError):
+            self.backend.starred_messages()
 
     def test_every_wacli_command_carries_its_account(self) -> None:
         completed = subprocess.CompletedProcess([], 0, '{"success":true,"data":{}}', "")

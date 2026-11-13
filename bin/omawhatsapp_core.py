@@ -112,6 +112,18 @@ SHORTCUT_CATALOG = [{'id': 'find',
   'scope': 'window',
   'keys': ['Ctrl+K'],
   'description': 'Full app'},
+ {'id': 'statusUpdates',
+  'title': 'Open status updates',
+  'group': 'Everyday actions',
+  'scope': 'window',
+  'keys': ['Ctrl+Shift+U'],
+  'description': 'Full app · viewing never sends a read receipt'},
+ {'id': 'starredMessages',
+  'title': 'Open starred messages',
+  'group': 'Everyday actions',
+  'scope': 'window',
+  'keys': ['Ctrl+Shift+S'],
+  'description': 'Full app'},
  {'id': 'chat1',
   'title': 'Open chat 1',
   'group': 'Everyday actions',
@@ -250,6 +262,12 @@ SHORTCUT_CATALOG = [{'id': 'find',
   'scope': 'navigation',
   'keys': ['PageDown'],
   'description': 'When you are not typing. Arrow keys inside fields keep editing text.'},
+ {'id': 'unstar',
+  'title': 'Unstar selected starred message',
+  'group': 'Navigation',
+  'scope': 'navigation',
+  'keys': ['U'],
+  'description': 'In the starred messages list, when you are not typing.'},
  {'id': 'send',
   'title': 'Send message',
   'group': 'Writing',
@@ -6636,36 +6654,166 @@ class Backend:
         return {"ok": True, "kind": "join-group", "jid": str(data.get("jid") or "")}
 
     STATUS_LIFETIME = 24 * 3600
+    MAX_STATUSES = 200
+    MAX_STARRED = 500
 
-    def statuses(self, mine_only: bool = False) -> dict[str, Any]:
-        """Local only: the status updates of the last 24 hours, yours and your contacts'."""
+    def statuses(self, mine_only: bool = False, all_accounts: bool = False) -> dict[str, Any]:
+        """Local only: the status updates of the last 24 hours, yours and your contacts'.
+
+        Reading them never tells WhatsApp they were seen: nothing here runs
+        wacli. ``all_accounts`` merges every configured account, each row
+        naming its own; otherwise only the account this request selected.
+        """
+        merged: list[dict[str, Any]] = []
+        reports: list[dict[str, Any]] = []
+        for account in self.accounts() if all_accounts else [self.active]:
+            with self._using(account):
+                try:
+                    merged.extend(self._account_statuses(mine_only))
+                except OmaWhatsAppError as exc:
+                    if not all_accounts:
+                        raise
+                    reports.append({"account": account.name, "ready": False,
+                                    "error": clean_error(exc, "That account could not be read.")})
+                    continue
+            reports.append({"account": account.name, "ready": True, "error": ""})
+        merged.sort(key=lambda item: -item["timestamp"])
+        return {"ok": True, "kind": "statuses", "statuses": merged[:self.MAX_STATUSES],
+                "accounts": reports}
+
+    def _account_statuses(self, mine_only: bool) -> list[dict[str, Any]]:
         since = int(time.time()) - self.STATUS_LIFETIME
         try:
             with closing(self._connect()) as connection:
                 if not self._has_table(connection, "status_messages"):
-                    return {"ok": True, "kind": "statuses", "statuses": []}
+                    return []
                 rows = connection.execute(
                     """SELECT status.msg_id, status.ts, status.from_me, status.sender_jid,
                       COALESCE(NULLIF(contacts.full_name, ''), NULLIF(contacts.push_name, ''),
                         NULLIF(status.sender_name, ''), '') AS sender_name,
-                      status.text, status.media_type, status.media_caption, status.filename
+                      status.text, status.media_type, status.media_caption, status.filename,
+                      status.mime_type
                     FROM status_messages AS status
                     LEFT JOIN contacts ON contacts.jid = status.sender_jid
                     WHERE status.ts > ? AND (? = 0 OR status.from_me = 1)
-                    ORDER BY status.ts DESC LIMIT 200""",
-                    [since, 1 if mine_only else 0]).fetchall()
+                    ORDER BY status.ts DESC LIMIT ?""",
+                    [since, 1 if mine_only else 0, self.MAX_STATUSES]).fetchall()
         except sqlite3.Error as exc:
             raise OmaWhatsAppError("The local WhatsApp index could not be read.") from exc
-        return {"ok": True, "kind": "statuses", "statuses": [{
+        return [{
+            "account": self.active.name,
             "id": str(row["msg_id"]), "timestamp": int(row["ts"]),
             "from_me": bool(row["from_me"]),
             "sender": "You" if bool(row["from_me"]) else str(row["sender_name"] or ""),
             "sender_jid": "" if bool(row["from_me"]) else str(row["sender_jid"] or ""),
             "text": str(row["text"] or "")[:MAX_MESSAGE],
             "media_type": str(row["media_type"] or ""),
+            "mime_type": str(row["mime_type"] or "")[:128],
             "caption": str(row["media_caption"] or "")[:1024],
             "filename": str(row["filename"] or ""),
-        } for row in rows]}
+        } for row in rows]
+
+    def starred_messages(self, jid: str = "", limit: Any = 200,
+                         all_accounts: bool = False) -> dict[str, Any]:
+        """Local only: starred messages, the newest star first.
+
+        With ``jid`` only that chat of the account this request selected;
+        otherwise every chat of that account, or of every configured account
+        with ``all_accounts``. Each row names the chat (as the rail lists it)
+        and the account it belongs to, so the app can open it.
+        """
+        bound = bounded_int(limit, 200, 1, self.MAX_STARRED)
+        target = str(jid or "").strip()
+        if target and all_accounts:
+            raise OmaWhatsAppError("Choose one chat or every account, not both.")
+        if target:
+            return {"ok": True, "kind": "starred",
+                    "starred": self._account_starred(bound, self._chat(target)),
+                    "accounts": [{"account": self.active.name, "ready": True, "error": ""}]}
+        merged: list[dict[str, Any]] = []
+        reports: list[dict[str, Any]] = []
+        for account in self.accounts() if all_accounts else [self.active]:
+            with self._using(account):
+                try:
+                    merged.extend(self._account_starred(bound, None))
+                except OmaWhatsAppError as exc:
+                    if not all_accounts:
+                        raise
+                    reports.append({"account": account.name, "ready": False,
+                                    "error": clean_error(exc, "That account could not be read.")})
+                    continue
+            reports.append({"account": account.name, "ready": True, "error": ""})
+        merged.sort(key=lambda item: (-item["starred_at"], -item["timestamp"]))
+        return {"ok": True, "kind": "starred", "starred": merged[:bound], "accounts": reports}
+
+    def _account_starred(self, limit: int, chat: dict[str, str] | None) -> list[dict[str, Any]]:
+        scope = ""
+        parameters: list[Any] = []
+        if chat is not None:
+            chat_jids = self._chat_jids(chat["jid"])
+            scope = f"AND starred.chat_jid IN ({','.join('?' for _ in chat_jids)})"
+            parameters.extend(chat_jids)
+        parameters.append(limit)
+        try:
+            with closing(self._connect()) as connection:
+                if not self._has_table(connection, "starred"):
+                    return []
+                # A message deleted for everyone or only here is no longer
+                # starred on the phone either.
+                rows = connection.execute(
+                    f"""SELECT starred.chat_jid, starred.msg_id, starred.starred_at,
+                      message.ts, message.from_me, message.sender_jid, message.sender_name,
+                      COALESCE(message.media_type, '') AS media_type,
+                      {self._preview_sql("message")} AS preview
+                    FROM starred
+                    JOIN messages AS message
+                      ON message.chat_jid = starred.chat_jid AND message.msg_id = starred.msg_id
+                    WHERE message.deleted_at IS NULL AND NOT {revoked_sql("message")}
+                      AND COALESCE(message.reaction_to_id, '') = '' {scope}
+                    ORDER BY starred.starred_at DESC, message.ts DESC, message.rowid DESC
+                    LIMIT ?""", parameters).fetchall()
+                # Rows wacli filed under a contact's @lid belong to their phone chat.
+                aliases = ({} if chat is not None
+                           or not any(str(row["chat_jid"]).endswith("@lid") for row in rows)
+                           else self._lid_aliases())
+                owners = {str(row["chat_jid"]): chat["jid"] if chat is not None
+                          else aliases.get(str(row["chat_jid"]), str(row["chat_jid"]))
+                          for row in rows}
+                known: dict[str, sqlite3.Row] = {}
+                wanted = sorted(set(owners.values()))
+                if wanted:
+                    known = {str(item["jid"]): item for item in connection.execute(
+                        f"""SELECT chats.jid, {chat_kind_sql()} AS kind,
+                          {self._chat_name_sql()} AS name
+                        FROM chats
+                        LEFT JOIN groups ON groups.jid = chats.jid
+                        LEFT JOIN contacts ON contacts.jid = chats.jid
+                        LEFT JOIN messages AS latest ON latest.rowid = (
+                          SELECT rowid FROM messages WHERE chat_jid = chats.jid
+                          ORDER BY ts DESC, rowid DESC LIMIT 1)
+                        WHERE chats.jid IN ({','.join('?' for _ in wanted)})
+                          AND {SUPPORTED_CHAT_WHERE}""", wanted).fetchall()}
+        except sqlite3.Error as exc:
+            raise OmaWhatsAppError("The local WhatsApp index could not be read.") from exc
+        values = []
+        for row in rows:
+            owner = known.get(owners[str(row["chat_jid"])])
+            # Channels and Communities are not in the rail: nothing to open.
+            if owner is None:
+                continue
+            from_me = bool(row["from_me"])
+            values.append({
+                "account": self.active.name,
+                "chat_jid": str(owner["jid"]), "chat_name": str(owner["name"]),
+                "chat_kind": str(owner["kind"]),
+                "id": str(row["msg_id"]), "timestamp": int(row["ts"] or 0),
+                "starred_at": int(row["starred_at"] or 0), "from_me": from_me,
+                "sender": "You" if from_me else str(row["sender_name"] or "WhatsApp"),
+                "sender_jid": "" if from_me else str(row["sender_jid"] or ""),
+                "media_type": str(row["media_type"] or "")[:32],
+                "text": " ".join(contact_preview(str(row["preview"] or "")).split())[:512],
+            })
+        return values
 
     def delete_status(self, status_id: str) -> dict[str, Any]:
         """Delete one of your own status updates for everyone."""
@@ -8138,6 +8286,7 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("select")
     commands.add_parser("poll-vote")
     commands.add_parser("statuses")
+    commands.add_parser("starred")
     commands.add_parser("create-group")
     commands.add_parser("export-chat")
     commands.add_parser("download-pending")
@@ -8399,7 +8548,12 @@ def main() -> int:
         if args.command == "join-group":
             return emit(backend.join_group(payload.get("invite")))
         if args.command == "statuses":
-            return emit(backend.statuses(payload.get("mine_only") is True))
+            return emit(backend.statuses(payload.get("mine_only") is True,
+                                         payload.get("all_accounts") is True))
+        if args.command == "starred":
+            return emit(backend.starred_messages(str(payload.get("jid") or ""),
+                                                 payload.get("limit", 200),
+                                                 payload.get("all_accounts") is True))
         if args.command == "delete-status":
             return emit(backend.delete_status(str(payload.get("id") or "")))
         if args.command == "poll-vote":
