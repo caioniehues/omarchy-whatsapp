@@ -40,11 +40,11 @@ implemented, `intentionally excluded` is deferred product scope, and
 | Chat filters | archived/pinned/muted/unread flags | planned | each filter and combinations |
 | New chat | contact/chat lookup + send | planned | existing contact and first send |
 | Archived chats surface | `chats list --archived` | planned | archive/unarchive round trip |
-| Starred messages surface | `messages starred` | planned | global and per-chat lists |
+| Starred messages surface | local `starred` mirror; unstar through `messages star` | done | global and per-chat lists, jump to message |
 | Channels/newsletters | `channels`, `...@newsletter` | intentionally excluded | later top-level section |
 | Communities | `groups.is_parent`, `linked_parent_jid` | intentionally excluded | later top-level section |
 | Calls history | `calls list` | intentionally excluded | later top-level section |
-| Status list/view | local `status_messages` | planned | text and downloaded media |
+| Status list/view | local `status_messages` | done | text; photos and videos only when on this computer (wacli does not download status media) |
 | Settings/profile | `profile` commands | building | read/update guarded flows |
 
 ## 2. Responsive structure

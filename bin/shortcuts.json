@@ -40,6 +40,26 @@
     "description": "Full app"
   },
   {
+    "id": "statusUpdates",
+    "title": "Open status updates",
+    "group": "Everyday actions",
+    "scope": "window",
+    "keys": [
+      "Ctrl+Shift+U"
+    ],
+    "description": "Full app \u00b7 viewing never sends a read receipt"
+  },
+  {
+    "id": "starredMessages",
+    "title": "Open starred messages",
+    "group": "Everyday actions",
+    "scope": "window",
+    "keys": [
+      "Ctrl+Shift+S"
+    ],
+    "description": "Full app"
+  },
+  {
     "id": "chat1",
     "title": "Open chat 1",
     "group": "Everyday actions",
@@ -271,6 +291,16 @@
       "PageDown"
     ],
     "description": "When you are not typing. Arrow keys inside fields keep editing text."
+  },
+  {
+    "id": "unstar",
+    "title": "Unstar selected starred message",
+    "group": "Navigation",
+    "scope": "navigation",
+    "keys": [
+      "U"
+    ],
+    "description": "In the starred messages list, when you are not typing."
   },
   {
     "id": "send",

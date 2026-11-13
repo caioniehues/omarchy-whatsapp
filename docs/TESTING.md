@@ -137,6 +137,8 @@ omarchy-shell io.github.caioniehues.omawhatsapp closeApp
 omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true}'
 omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true,"viewer":true}'
 omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true,"voice":true}'
+omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true,"status":true}'
+omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true,"starred":true}'
 ```
 
 Capture only that window. Never publish a real conversation timeline.

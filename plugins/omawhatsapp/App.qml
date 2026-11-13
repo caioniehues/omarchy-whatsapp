@@ -192,7 +192,7 @@ Item {
       { id: "demo-2b", text: "", sender: "You", sender_jid: "", timestamp: 1787539199, from_me: true, media_type: "image", mime_type: "image/svg+xml", local_path: "__demo_photo__", album_id: "demo-album", album_index: 1, album_count: 2 }
     ] },
     { id: "demo-3", text: "Review the private repo README and release checklist #ship", sender: "You", sender_jid: "", timestamp: 1787538000, from_me: true, done: false, media_type: "", mime_type: "", local_path: "", tags: ["ship"], quoted_id: "demo-1", quoted_sender: "You", quoted_text: "Instant, native, and private #design", status: "delivered" },
-    { id: "demo-4", text: "https://github.com/openclaw/wacli #reference", sender: "You", sender_jid: "", timestamp: 1787536800, from_me: true, done: true, media_type: "", mime_type: "", local_path: "", tags: ["reference"], status: "sent" }
+    { id: "demo-4", text: "https://github.com/openclaw/wacli #reference", sender: "You", sender_jid: "", timestamp: 1787536800, from_me: true, done: true, media_type: "", mime_type: "", local_path: "", tags: ["reference"], starred: true, status: "sent" }
   ]
   property var demoMembers: [
     { jid: "sam@s.whatsapp.net", name: "Sam Rivera", phone: "+1 555 123 4567", role: "admin" },
@@ -428,6 +428,10 @@ Item {
     var selectedFromPayload = false
     if (pendingOpenChatJid !== "") selectedFromPayload = selectPendingOpenChat()
     chatDetailsOpen = demoMode && payload.details === true
+    // {"demo":true,"status":true} and {"demo":true,"starred":true} open those views.
+    statusOpen = demoMode && payload.status === true
+    starredOpen = false
+    if (demoMode && payload.starred === true && !statusOpen) Qt.callLater(function() { root.openStarred("all") })
     // {"forward":{…}} from the dropdown carries on the forward it started
     // there: the picker opens for that message instead of asking again.
     if (!demoMode && payload.forward && typeof payload.forward === "object"
@@ -484,7 +488,8 @@ Item {
     }
     composerChatKey = currentChatKey()
     Qt.callLater(function() {
-      if (demoMode && payload.viewer === true && root.mediaGallery.length > 0)
+      if (root.statusOpen) statusView.forceActiveFocus()
+      else if (demoMode && payload.viewer === true && root.mediaGallery.length > 0)
         mediaViewer.openAt(0)
       else if (demoMode && payload.mention === true) {
         composer.text = "@"
@@ -518,7 +523,7 @@ Item {
   // own mouse guard stops mouse areas only: tap and hover handlers on the
   // bubbles under it still fired, so the covered conversation is disabled.
   readonly property bool conversationCovered: (chatDetailsPanel.visible && !root.chatDetailsBeside)
-    || (mediaBrowser.visible && !root.mediaBrowserBeside)
+    || (mediaBrowser.visible && !root.mediaBrowserBeside) || root.fullViewOpen
   property bool composerFocusBeforeCover: false
   onConversationCoveredChanged: {
     if (conversationCovered) {
@@ -542,9 +547,163 @@ Item {
     return true
   }
   function openBrowserMedia(item, gallery) {
-    viewerItems = gallery
-    var index = gallery.indexOf(item)
+    // A list passed through a signal arrives as a sequence, not an Array,
+    // and the viewer accepts only arrays: copy it.
+    var items = []
+    for (var i = 0; gallery && i < gallery.length; i++) items.push(gallery[i])
+    viewerItems = items
+    var index = items.indexOf(item)
+    if (index < 0) index = items.findIndex(function(entry) { return String(entry.id || "") === String(item && item.id || "") })
     mediaViewer.openAt(index >= 0 ? index : 0)
+  }
+
+  // Status updates and starred messages: views over the whole window, the
+  // chat list included, so the list underneath is disabled too.
+  property bool statusOpen: false
+  property bool starredOpen: false
+  readonly property bool fullViewOpen: (statusOpen || starredOpen) && !settingsOpen
+  // "all" or "chat": the starred messages of every chat or of the open one.
+  property string starredScope: "all"
+  property var starredChatRef: AccountModel.chatRef("", "")
+  readonly property var starredChat: AccountModel.findChat(sourceChats, starredChatRef)
+  Binding {
+    when: !root.demoMode && !!root.service
+    target: root.service
+    property: "statusUpdatesWanted"
+    value: root.opened && root.statusOpen
+  }
+  Binding {
+    when: !root.demoMode && !!root.service
+    target: root.service
+    property: "starredWanted"
+    value: root.opened && root.starredOpen
+  }
+  function openStatusUpdates() {
+    if (!opened) return false
+    settingsOpen = false
+    starredOpen = false
+    statusOpen = true
+    Qt.callLater(function() { statusView.forceActiveFocus() })
+    return true
+  }
+  function openStarred(scope) {
+    if (!opened) return false
+    var ref = currentChatRef()
+    starredChatRef = ref
+    starredScope = scope === "chat" && ref.jid !== "" ? "chat" : "all"
+    if (!demoMode && service)
+      service.setStarredScope(starredScope === "chat" ? ref : null)
+    settingsOpen = false
+    statusOpen = false
+    starredOpen = true
+    Qt.callLater(function() { starredView.forceActiveFocus() })
+    return true
+  }
+  function closeFullView() {
+    if (!statusOpen && !starredOpen) return false
+    statusOpen = false
+    starredOpen = false
+    // The hidden view held the keys; give them back unless the composer did.
+    Qt.callLater(function() {
+      if (!root.fullViewOpen && !composer.activeFocus && !root.textEntryActive) keyboardHome.forceActiveFocus()
+    })
+    return true
+  }
+  property var demoStatuses: [
+    { account: "work", id: "demo-status-mine", timestamp: 1787538600, from_me: true, sender: "You", sender_jid: "",
+      text: "Status updates and starred messages, both in the app", media_type: "", mime_type: "", caption: "" },
+    { account: "work", id: "demo-status-sam-1", timestamp: 1787533200, from_me: false, sender: "Sam Rivera",
+      sender_jid: "sam@s.whatsapp.net", text: "", media_type: "image", mime_type: "image/png",
+      caption: "New desk, same keyboard", local_path: "__demo_photo__" },
+    { account: "work", id: "demo-status-sam-2", timestamp: 1787539800, from_me: false, sender: "Sam Rivera",
+      sender_jid: "sam@s.whatsapp.net", text: "Coffee first, then the release", media_type: "", mime_type: "", caption: "" },
+    { account: "personal", id: "demo-status-alex", timestamp: 1787536000, from_me: false, sender: "Alex",
+      sender_jid: "alex@s.whatsapp.net", text: "", media_type: "video", mime_type: "video/mp4",
+      caption: "Release walkthrough" }
+  ]
+  readonly property var statusRows: demoMode ? demoStatuses
+    : (service && Array.isArray(service.statusUpdates) ? service.statusUpdates : [])
+  // The demo's starred messages are the starred demo bubbles, in its first chat.
+  readonly property var demoStarred: demoItems.filter(function(item) { return item.starred === true })
+    .map(function(item) {
+      return { account: "work", chat_jid: "demo-lab", chat_name: "Omarchy Lab", chat_kind: "group",
+        id: String(item.id), timestamp: Number(item.timestamp || 0), starred_at: Number(item.timestamp || 0),
+        from_me: item.from_me === true, sender: String(item.sender || ""), media_type: String(item.media_type || ""),
+        text: String(item.text || "") }
+    })
+  // A star taken off from here leaves the list at once; the mirror follows.
+  readonly property var starredRows: {
+    if (demoMode) return demoStarred.filter(function(item) {
+      return starredScope === "all" || AccountModel.sameRef(starredChatRef, AccountModel.chatRef(item.account, item.chat_jid))
+    })
+    if (!service || !Array.isArray(service.starredItems)) return []
+    var overrides = service.starOverrides || ({})
+    return service.starredItems.filter(function(item) {
+      return overrides[AccountModel.chatKey(item.account, item.chat_jid) + "\n" + String(item.id)] !== false
+    })
+  }
+  function unstarFromList(item) {
+    if (!item) return false
+    var ref = AccountModel.chatRef(String(item.account || ""), String(item.chat_jid || ""))
+    if (demoMode) { setDemoStarred([String(item.id)], false); return true }
+    return !!service && service.starMessage(ref, item, false, "app")
+  }
+  // Opening a starred message goes to its chat and selects it there, loading
+  // older pages of the chat until it shows.
+  property var pendingJump: null
+  function openStarredMessage(item) {
+    if (!item) return false
+    var ref = AccountModel.chatRef(String(item.account || ""), String(item.chat_jid || ""))
+    var chat = AccountModel.findChat(sourceChats, ref)
+    if (!chat) {
+      showToast("That chat is no longer in your chat list")
+      return false
+    }
+    closeFullView()
+    messageSearchField.text = ""
+    pendingJump = { key: ref.key, id: String(item.id), timestamp: Number(item.timestamp || 0), pages: 0 }
+    if (currentChatKey() !== ref.key) selectChat(chat, "messages")
+    else focusMessages()
+    Qt.callLater(resolvePendingJump)
+    return true
+  }
+  function resolvePendingJump() {
+    var jump = pendingJump
+    if (!jump) return false
+    if (jump.key !== currentChatKey()) { pendingJump = null; return false }
+    var index = AccountModel.messageIndexOf(visibleMessages, jump.id)
+    if (index >= 0) {
+      pendingJump = null
+      cursorIndex = index
+      messageList.currentIndex = index
+      focusMessages()
+      Qt.callLater(function() { messageList.positionViewAtIndex(index, ListView.Center) })
+      return true
+    }
+    if (demoMode || !service) {
+      pendingJump = null
+      showToast("That message is not on this computer any more")
+      return false
+    }
+    if (service.loadingMessages || service.loadingOlder) return false
+    var oldest = visibleMessages.length > 0 ? visibleMessages[visibleMessages.length - 1] : null
+    // Older than the message and still not found: it is gone.
+    if (!oldest || !service.hasOlderMessages || jump.pages >= 40
+        || Number(oldest.timestamp || 0) < jump.timestamp) {
+      if (oldest || !service.hasOlderMessages) {
+        pendingJump = null
+        showToast("That message is not on this computer any more")
+      }
+      return false
+    }
+    if (service.loadOlderMessages()) pendingJump = Object.assign({}, jump, { pages: jump.pages + 1 })
+    return false
+  }
+  Connections {
+    target: root.service
+    ignoreUnknownSignals: true
+    function onLoadingMessagesChanged() { if (root.pendingJump) Qt.callLater(root.resolvePendingJump) }
+    function onLoadingOlderChanged() { if (root.pendingJump) Qt.callLater(root.resolvePendingJump) }
   }
   property var demoDetails: ({
     ok: true, kind: "chat-details", chat: { kind: "group", name: "Omarchy Lab" },
@@ -870,6 +1029,7 @@ Item {
   }
 
   function goBack() {
+    if (root.closeFullView()) return
     if (root.mediaBrowserOpen) {
       root.mediaBrowserOpen = false
       return
@@ -1536,6 +1696,7 @@ Item {
   }
   onVisibleMessagesChanged: {
     root.resolveUnreadAnchor()
+    if (root.pendingJump) Qt.callLater(root.resolvePendingJump)
     if (root.unreadMarkerPositioned || root.unreadDividerIndex < 0) return
     root.unreadMarkerPositioned = true
     var target = root.unreadDividerIndex
@@ -1544,6 +1705,8 @@ Item {
 
   function selectChat(chat, focusTarget) {
     if (!chat) return
+    // A chat chosen any way (Alt+N, Ctrl+K, a starred message) leaves these views.
+    root.closeFullView()
     root.signatureSkipped = false
     root.unreadMarker = { key: AccountModel.refOf(chat).key, count: Number(chat.unread || 0),
       anchor: "", resolved: Number(chat.unread || 0) <= 0 }
@@ -2455,6 +2618,22 @@ Item {
         onActivated: root.openQuickSwitcher()
       }
 
+      Shortcut {
+        sequences: root.shortcutSequences("statusUpdates")
+        autoRepeat: false
+        enabled: root.opened && !root.settingsOpen && !root.onboarding && !mediaViewer.opened && !forwardPicker.opened
+        context: Qt.WindowShortcut
+        onActivated: root.statusOpen ? root.closeFullView() : root.openStatusUpdates()
+      }
+
+      Shortcut {
+        sequences: root.shortcutSequences("starredMessages")
+        autoRepeat: false
+        enabled: root.opened && !root.settingsOpen && !root.onboarding && !mediaViewer.opened && !forwardPicker.opened
+        context: Qt.WindowShortcut
+        onActivated: root.starredOpen ? root.closeFullView() : root.openStarred("all")
+      }
+
       // Qt already ignores window shortcuts while a modal or Esc-closable
       // popup is open. Every dialog and menu here is one (only the passive
       // format bar over a selection is not), so the popup clauses below are
@@ -2698,6 +2877,12 @@ Item {
 
       Keys.onPressed: function(event) {
         if (mediaViewer.opened || forwardPicker.opened) return
+        // Their own keys are handled by the views; nothing reaches the chats under them.
+        if (root.fullViewOpen) {
+          if (root.shortcutMatches("back", event)) root.closeFullView()
+          event.accepted = true
+          return
+        }
         if (root.settingsOpen) {
           if (event.key === Qt.Key_Escape) root.settingsOpen = false
           event.accepted = true
@@ -2774,6 +2959,7 @@ Item {
 
       Rectangle {
         id: sidebar
+        enabled: !root.fullViewOpen
         anchors.top: parent.top
         anchors.bottom: parent.bottom
         anchors.left: parent.left
@@ -2924,6 +3110,28 @@ Item {
                 fontSize: Style.font.body
                 size: Style.space(28)
                 onClicked: root.openNewChat()
+              }
+              PanelActionButton {
+                objectName: "railStatusButton"
+                iconText: "󰺕"
+                tooltipText: "Status updates · " + root.shortcutLabel("statusUpdates")
+                foreground: root.statusOpen ? root.accent : root.dim
+                hoverColor: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                size: Style.space(28)
+                onClicked: root.statusOpen ? root.closeFullView() : root.openStatusUpdates()
+              }
+              PanelActionButton {
+                objectName: "railStarredButton"
+                iconText: "󰓎"
+                tooltipText: "Starred messages · " + root.shortcutLabel("starredMessages")
+                foreground: root.starredOpen ? root.accent : root.dim
+                hoverColor: root.foreground
+                fontFamily: root.fontFamily
+                fontSize: Style.font.body
+                size: Style.space(28)
+                onClicked: root.starredOpen ? root.closeFullView() : root.openStarred("all")
               }
               PanelActionButton {
                 objectName: "railSettingsButton"
@@ -6309,6 +6517,7 @@ Item {
         onActionRequested: function(action) { root.runChatDetailsAction(action) }
         onFilterRequested: function(filter) { root.openMediaBrowser(filter) }
         onOpenChatRequested: function(jid, name, phone) { root.openFromChatDetails(jid, name, phone) }
+        onStarredRequested: { root.chatDetailsOpen = false; root.openStarred("chat") }
         service: root.demoMode ? null : root.service
         urgent: root.urgent
         onCopyRequested: function(text) { root.copyText(text); root.showCopyToast() }
@@ -6342,6 +6551,58 @@ Item {
         onDownloadRequested: function(item) {
           if (!root.demoMode && root.service) root.service.downloadMedia(root.currentChatRef(), item, "app")
         }
+      }
+
+      StatusView {
+        id: statusView
+        z: 300
+        anchors.fill: parent
+        visible: root.statusOpen && !root.settingsOpen
+        items: root.statusRows
+        loading: !root.demoMode && !!root.service && root.service.statusUpdatesLoading
+        multiAccount: root.multiAccount
+        showAvatars: root.showAvatars
+        avatarPaths: root.avatarsByJid
+        shortcuts: root.shortcutOverrides
+        timeFormat: root.timeFormat
+        now: root.demoMode ? root.demoNow : root.clockNow
+        foreground: root.foreground
+        surface: root.background
+        accent: root.accent
+        muted: root.dim
+        fontFamily: root.fontFamily
+        onCloseRequested: root.closeFullView()
+        onOpenMediaRequested: function(item, gallery) { root.openBrowserMedia(item, gallery) }
+      }
+
+      StarredView {
+        id: starredView
+        z: 300
+        anchors.fill: parent
+        visible: root.starredOpen && !root.settingsOpen
+        items: root.starredRows
+        loading: !root.demoMode && !!root.service && root.service.starredLoading
+        scope: root.starredScope
+        chatName: root.starredChat ? String(root.starredChat.name || "") : ""
+        multiAccount: root.multiAccount
+        starAvailable: root.starAvailable
+        writableAccount: !root.demoMode && root.service ? String(root.service.statusAccount || "") : ""
+        demoMode: root.demoMode
+        shortcuts: root.shortcutOverrides
+        now: root.demoMode ? root.demoNow : root.clockNow
+        foreground: root.foreground
+        surface: root.background
+        accent: root.accent
+        muted: root.dim
+        fontFamily: root.fontFamily
+        onCloseRequested: root.closeFullView()
+        onScopeRequested: function(scope) {
+          root.starredScope = scope === "chat" && root.starredChatRef.jid !== "" ? "chat" : "all"
+          if (!root.demoMode && root.service)
+            root.service.setStarredScope(root.starredScope === "chat" ? root.starredChatRef : null)
+        }
+        onOpenRequested: function(item) { root.openStarredMessage(item) }
+        onUnstarRequested: function(item) { root.unstarFromList(item) }
       }
 
       QuickSwitcher {
@@ -6399,7 +6660,11 @@ Item {
         anchors.fill: parent
         // The media browser opens the viewer on its own gallery.
         items: root.viewerItems.length > 0 ? root.viewerItems : root.mediaGallery
-        onOpenedChanged: if (!opened) root.viewerItems = []
+        onOpenedChanged: {
+          if (opened) return
+          root.viewerItems = []
+          if (root.statusOpen) statusView.forceActiveFocus()
+        }
         surfaceActive: root.opened
         playback: root.playbackCoordinator
         chatRef: root.currentChatRef()
