@@ -510,8 +510,8 @@ Rectangle {
                   radius: height / 2
                   color: selected ? root.accent : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06)
                   Text {
-                    id: chipLabel
                     textFormat: Text.PlainText
+                    id: chipLabel
                     anchors.centerIn: parent
                     text: historyChip.modelData.label
                     color: historyChip.selected ? root.background : root.foreground
