@@ -92,6 +92,24 @@ an owner-private cache with opaque names. CDN URLs, query tokens, account store
 paths, and chat identifiers are not stored in that index or exposed to QML;
 the UI receives only a validated absolute local path.
 
+Your own profile (Settings → Profile) shows what this computer already holds:
+the name you last set here or the mirror's contact entry, the About text from
+the last check, and the cached photo. "Check with WhatsApp" is an explicit
+remote read that pauses sync once for both requests. Each change names the
+exact new value and waits for a second click; the helper also demands its own
+`whatsapp-write` (or `destructive`, to remove the photo) authorization, refuses
+while the account is offline, and never retries an unconfirmed change. Names
+and About text are bounded to WhatsApp's 25 and 139 characters on one line. A
+new photo must be a regular JPEG or PNG file up to 10 MB, opened without
+following links; wacli receives a mode-`0600` private copy of the checked
+bytes, removed afterwards. Values and paths reach wacli only on the private
+stdin transport, and photos render only through the isolated media worker.
+
+Older history from the phone is requested only after the local copy of the
+open chat ends and only on an explicit click: one `wacli history backfill`
+batch of at most 50 messages for that exact chat, refused while its account is
+offline, and never repeated by itself.
+
 Group settings are read from WhatsApp only when "Load group settings" is
 pressed (`wacli groups info`, an explicit remote read that pauses sync for a
 moment); the invite link and pending join requests are likewise fetched only

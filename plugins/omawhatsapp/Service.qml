@@ -270,6 +270,63 @@ Item {
     olderProcess.running = true
     return true
   }
+  // Older history from the phone: offered only once this computer's copy of
+  // the open chat is exhausted, asked only on an explicit click, one bounded
+  // batch per click for that one chat, and never repeated by itself.
+  readonly property int backfillCount: 50
+  property string backfillState: "idle"
+  property string backfillKey: ""
+  property string backfillMessage: ""
+  // idle, running, done or failed for the open chat; busy while another
+  // chat's request is still out.
+  readonly property string selectedBackfillState: backfillKey !== ""
+    && backfillKey === selectedChatRef().key ? backfillState
+    : (backfillState === "running" ? "busy" : "idle")
+  readonly property string selectedBackfillMessage: backfillKey !== ""
+    && backfillKey === selectedChatRef().key ? backfillMessage : ""
+  readonly property bool selectedChatOnline: accountOnline(selectedChatAccount)
+  function accountOnline(account) {
+    var name = String(account || "")
+    var list = Array.isArray(accounts) ? accounts : []
+    for (var i = 0; i < list.length; i++)
+      if (String(list[i] && list[i].account || "") === name) return list[i].online !== false
+    return !offlineMode
+  }
+  function requestHistoryBackfill() {
+    var ref = selectedChatRef()
+    if (ref.jid === "" || query !== "" || hasOlderMessages || loadingOlder) return false
+    if (backfillState === "running" || !accountOnline(ref.account)) return false
+    backfillKey = ref.key
+    backfillState = "running"
+    backfillMessage = ""
+    backfillProcess.chatRef = ref
+    backfillProcess.payload = JSON.stringify({ account: ref.account, jid: ref.jid,
+      count: backfillCount, authorization: "sync" })
+    backfillProcess.stdinEnabled = true
+    backfillProcess.running = true
+    return true
+  }
+  function finishHistoryBackfill(chatRef, exitCode, text, errorText) {
+    var payload = parseJson(text)
+    if (exitCode !== 0 || !payload || payload.ok !== true) {
+      backfillState = "failed"
+      backfillMessage = (payload && payload.error)
+        || helperErrorText(errorText, "Older messages could not be requested.")
+      return false
+    }
+    var added = Math.max(0, Number(payload.added || 0))
+    backfillState = "done"
+    backfillMessage = added === 1 ? "1 older message arrived from your phone"
+      : added > 1 ? added + " older messages arrived from your phone"
+      : payload.answered === true ? "Your phone has no older messages for this chat"
+      : "Your phone did not send older messages. Keep it online and try again."
+    // The new messages are local now: read them like any older page, once.
+    if (added > 0 && AccountModel.sameRef(chatRef, selectedChatRef())) {
+      hasOlderMessages = true
+      loadOlderMessages()
+    }
+    return true
+  }
   // Media browser: the chat's media, links or documents over its whole local
   // history. The conversation itself is never filtered.
   property var browserItems: []
@@ -444,6 +501,7 @@ Item {
   readonly property bool voiceCapturing: voiceRecorder.capturing
   readonly property alias playback: playbackCoordinator
   readonly property alias accountOperations: accountOperations
+  readonly property alias profileOperations: profileOperations
 
   readonly property bool windowOpen: appOpen || dropdownOpen
   // Set by the full app and the bar dropdown while the selected conversation
@@ -532,6 +590,13 @@ Item {
         + (pending > 0 ? root.autoAvatarBusyGap : root.autoAvatarQuietGap)
     }
   }
+  ProfileOperations {
+    id: profileOperations
+    helper: root.helper
+    zenityAvailable: root.zenityAvailable
+    // A new own photo can also be a note-to-self chat's photo.
+    onProfileChanged: root.refreshChats()
+  }
 
   // Automatic chat-photo refresh. wacli needs the store lock for photo
   // lookups, so each batch pauses sync for a few seconds: run only while no
@@ -570,6 +635,9 @@ Item {
     if (accountOperations && accountOperations.avatarBusy) return "checking chat photos"
     if (numberCheck && numberCheck.loading) return "checking a number"
     if (groupSettingsLoading) return "reading group settings"
+    if (profileOperations && profileOperations.busy)
+      return profileOperations.busyAction === "refresh" ? "reading your profile" : "updating your profile"
+    if (backfillState === "running") return "loading older messages from your phone"
     if (!writing) return ""
     // Files, voice notes, text, stickers, polls and reactions go through the
     // sync process itself (wacli 0.18.3) and never pause it.
@@ -2383,6 +2451,21 @@ Item {
         .filter(function(item) { return !known[String(item.id || "")] })
       root.olderMessages = root.olderMessages.concat(page)
       root.hasOlderMessages = payload.has_more === true && page.length > 0
+    }
+  }
+
+  Process {
+    id: backfillProcess
+    objectName: "backfillProcess"
+    property string payload: ""
+    property var chatRef: ({ account: "", jid: "", key: "" })
+    command: [root.helper, "history-backfill"]
+    stdinEnabled: true
+    stdout: StdioCollector { id: backfillOutput }
+    stderr: StdioCollector { id: backfillError }
+    onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
+    onExited: function(exitCode) {
+      root.finishHistoryBackfill(chatRef, exitCode, backfillOutput.text, backfillError.text)
     }
   }
 

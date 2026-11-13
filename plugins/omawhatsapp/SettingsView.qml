@@ -49,6 +49,7 @@ Rectangle {
     { id: "media", icon: "󰥶", label: "Media" },
     { id: "sync", icon: "󰓦", label: "Sync & storage" },
     { id: "accounts", icon: "󰀏", label: "Accounts" },
+    { id: "profile", icon: "󰀉", label: "Profile" },
     { id: "updates", icon: "󰚰", label: "Updates" },
     { id: "shortcuts", icon: "󰥻", label: "Shortcuts" },
     { id: "about", icon: "󰋽", label: "About" }
@@ -252,6 +253,7 @@ Rectangle {
         available: live && !(value("accountOperations", null) || {}).linkBusy })
       return list
     }
+    if (section === "profile") return [{ kind: "profile" }]
     if (section === "updates") return [ { kind: "updates" } ]
     if (section === "shortcuts") return [{ kind: "shortcuts" }]
     if (section === "about") return [
@@ -490,6 +492,7 @@ Rectangle {
             : modelData.kind === "updates" ? updatesRow
             : modelData.kind === "shortcuts" ? shortcutsRow
             : modelData.kind === "signature" ? signatureRow
+            : modelData.kind === "profile" ? profileRow
             : modelData.kind === "account" ? accountRow
             : noteRow
         }
@@ -507,6 +510,22 @@ Rectangle {
       demoMode: settings.demoMode
       overlayHost: settings
       app: settings.app
+    }
+  }
+
+  Component {
+    id: profileRow
+    ProfilePanel {
+      width: parent ? parent.width : 0
+      operations: settings.live ? settings.value("profileOperations", null) : null
+      accounts: settings.value("accounts", [])
+      demoMode: settings.demoMode
+      foreground: settings.foreground
+      background: settings.background
+      accent: settings.accent
+      urgent: settings.urgent
+      dim: settings.dim
+      fontFamily: settings.fontFamily
     }
   }
 

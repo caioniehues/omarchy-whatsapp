@@ -74,6 +74,19 @@ TestCase {
       function quitApp() { record("quitApp", []); return true }
       property int aboutRequests: 0
       function refreshAbout() { aboutRequests += 1; return true }
+      property var profileOperations: QtObject {
+        property bool busy: false
+        property string busyAccount: ""
+        property string busyAction: ""
+        property var loads: []
+        property var changes: []
+        function profileFor(account) { return { name: "Synthetic Me", about: "Synthetic about", phone: "", photo_path: "", checked_at: 1 } }
+        function candidateFor(account) { return "" }
+        function errorFor(account) { return "" }
+        function noticeFor(account) { return "" }
+        function load(account) { loads = loads.concat([account]); return true }
+        function change(account, field, value) { changes = changes.concat([[account, field, value]]); return true }
+      }
     }
   }
 
@@ -108,7 +121,7 @@ TestCase {
   function test_sections_cover_every_area() {
     var h = create()
     compare(h.view.sections.map(function(item) { return item.id }),
-      ["reading", "notifications", "chats", "media", "sync", "accounts", "updates", "shortcuts", "about"])
+      ["reading", "notifications", "chats", "media", "sync", "accounts", "profile", "updates", "shortcuts", "about"])
     for (var i = 0; i < h.view.sections.length; i++)
       verify(h.view.rowsFor(h.view.sections[i].id).length > 0, h.view.sections[i].id)
   }
@@ -195,6 +208,31 @@ TestCase {
     var rows = findChild(h.view, "settingChoice-dropdown_rows-9")
     mouseClick(rows, rows.width / 2, rows.height / 2)
     compare(last(h.service).args, ["dropdown_rows", 9])
+  }
+
+  function test_profile_section_edits_through_profile_operations() {
+    var h = create()
+    h.view.openSection("profile")
+    wait(0)
+    compare(h.service.profileOperations.loads, [""], "the linked account's profile is read locally")
+    compare(findChild(h.view, "profileName-").text, "Synthetic Me")
+    findChild(h.view, "profileEditName-").clicked()
+    var editor = findChild(h.view, "profileEditor-")
+    editor.text = "Synthetic New"
+    // A status poll or settings write must not throw the edit away.
+    h.service.settingsWriting = true
+    h.service.accounts = h.service.accounts.slice()
+    wait(0)
+    compare(findChild(h.view, "profileEditor-"), editor)
+    compare(editor.text, "Synthetic New")
+    findChild(h.view, "profileReview-").clicked()
+    findChild(h.view, "profileConfirmButton-").clicked()
+    compare(h.service.profileOperations.changes, [["", "name", "Synthetic New"]])
+    var demo = create({ demoMode: true })
+    demo.view.openSection("profile")
+    wait(0)
+    compare(demo.service.profileOperations.loads, [], "demo reads nothing from this machine")
+    compare(findChild(demo.view, "profileName-work").text, "Jordan Lee")
   }
 
   function test_media_action_and_account_link_reach_account_operations() {

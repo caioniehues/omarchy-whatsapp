@@ -95,6 +95,10 @@ them keeps the chat list warm in the resident service.
 - With [Omasnap](https://github.com/tobi/omasnap) installed, Open externally
   sends images to its annotation editor.
 - Select text to copy it, or use Copy in the message menu.
+- At the top of a chat whose copy on this computer has ended, **Load older
+  messages from your phone** asks the phone once for up to 50 earlier
+  messages of that chat. It needs the phone online, is off while the account's
+  background sync is paused, and is never repeated by itself.
 
 ## Reading, ticks and presence
 
@@ -154,6 +158,7 @@ them keeps the chat list warm in the resident service.
 | Media | Automatic downloads, chat photo refresh |
 | Sync & storage | Background sync, start with the system, Quit, letting AI agents use WhatsApp, removing it from this computer, storage used |
 | Accounts | One card per account, link another |
+| Profile | Your name, About text and photo per account; check them with WhatsApp or change them, each change confirmed first |
 | Updates | Check for a newer version, update in a terminal, restart the shell after an update |
 
 ## Keyboard
