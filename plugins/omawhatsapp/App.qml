@@ -624,6 +624,12 @@ Item {
   function showFloatingDay() {
     if (messageList.count === 0) return
     var index = messageList.indexAt(messageList.width / 2, messageList.contentY + Style.space(12))
+    // At the very top the footer (start of history, older messages from the
+    // phone) comes first; the topmost message is the one right below it.
+    var footer = messageList.footerItem
+    if (index < 0 && footer && footer.height > 0)
+      index = messageList.indexAt(messageList.width / 2,
+        Math.max(messageList.contentY, footer.y + footer.height) + Style.space(12))
     var item = index >= 0 ? root.visibleMessages[index] : null
     floatingDayLabel = item ? TimeFormat.dayLabel(item.timestamp) : ""
     floatingDayHold.restart()
@@ -663,6 +669,54 @@ Item {
     return service.loadOlderMessages()
   }
   onOpenedChanged: if (opened) Qt.callLater(maybeLoadOlder)
+
+  // Older history from the phone, offered at the top of the timeline once
+  // this computer's copy of the chat has no older page left. Each click asks
+  // once; nothing here repeats the request by itself.
+  property string demoBackfillState: "idle"
+  property string demoBackfillMessage: ""
+  readonly property bool backfillSupported: root.demoMode
+    || (!!root.service && typeof root.service.requestHistoryBackfill === "function")
+  readonly property bool localHistoryExhausted: root.demoMode
+    || (!!root.service && root.service.hasOlderMessages === false && root.service.loadingOlder !== true)
+  readonly property string backfillState: root.demoMode ? root.demoBackfillState
+    : (root.backfillSupported ? String(root.service.selectedBackfillState || "idle") : "idle")
+  readonly property bool backfillOnline: root.demoMode || !root.service
+    || root.service.selectedChatOnline !== false
+  readonly property bool backfillOffered: root.backfillSupported && root.localHistoryExhausted
+    && root.visibleMessages.length > 0 && root.currentChatKey() !== ""
+    && messageSearchField.text.trim() === ""
+  readonly property bool backfillActionVisible: root.backfillOffered && root.backfillOnline
+    && ["idle", "done", "failed"].indexOf(root.backfillState) >= 0
+  readonly property string backfillActionText: root.backfillState === "failed" ? "Try again"
+    : root.backfillState === "done" ? "Load more from your phone" : "Load older messages from your phone"
+  readonly property string backfillStatusText: !root.backfillOffered ? ""
+    : root.backfillState === "running" ? "Asking your phone for older messages…"
+    : root.backfillState === "busy" ? "Your phone is still answering for another chat…"
+    : !root.backfillOnline ? "Background sync is paused for this account. Go online to load older messages from your phone."
+    : root.demoMode ? root.demoBackfillMessage
+    : String(root.service.selectedBackfillMessage || "")
+  function requestHistoryBackfill() {
+    if (!root.backfillActionVisible) return false
+    if (!root.demoMode) return root.service.requestHistoryBackfill()
+    // Demo: two synthetic messages arrive once; nothing reaches the helper.
+    if (root.demoItems.some(function(item) { return item.id === "demo-0b" })) {
+      root.demoBackfillState = "done"
+      root.demoBackfillMessage = "Your phone has no older messages for this chat"
+      return true
+    }
+    root.demoItems = root.demoItems.concat([
+      { id: "demo-0b", text: "Kickoff notes are in the shared folder #history", sender: "Sam Rivera",
+        sender_jid: "sam@s.whatsapp.net", timestamp: 1784862000, from_me: false, done: false,
+        media_type: "", mime_type: "", local_path: "", tags: ["history"] },
+      { id: "demo-0a", text: "Welcome to the lab, everyone", sender: "You", sender_jid: "",
+        timestamp: 1784858400, from_me: true, done: false, media_type: "", mime_type: "",
+        local_path: "", tags: [], status: "read" }
+    ])
+    root.demoBackfillState = "done"
+    root.demoBackfillMessage = "2 older messages arrived from your phone"
+    return true
+  }
 
   // A sticker from the picker goes at once, as on the phone, answering the
   // message being replied to if there is one.
@@ -3959,18 +4013,62 @@ Item {
           // Drawn bottom-to-top, the footer sits above the oldest message.
           footer: Item {
             width: messageList.width
-            height: olderHint.text !== "" ? Style.space(36) : 0
-            Text {
-              textFormat: Text.PlainText
-              id: olderHint
-              objectName: "olderMessagesHint"
+            height: olderFooter.visible ? olderFooter.implicitHeight + Style.space(16) : 0
+            Column {
+              id: olderFooter
+              visible: olderHint.text !== "" || root.backfillOffered
               anchors.centerIn: parent
-              text: root.demoMode || !root.service || root.visibleMessages.length === 0 ? ""
-                : root.service.loadingOlder ? "Loading older messages…"
-                : !root.service.hasOlderMessages ? "Start of this computer's copy of the chat" : ""
-              color: root.dimmer
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.caption
+              width: Math.min(parent.width - Style.space(24), Style.space(460))
+              spacing: Style.space(6)
+              Text {
+                textFormat: Text.PlainText
+                id: olderHint
+                objectName: "olderMessagesHint"
+                anchors.horizontalCenter: parent.horizontalCenter
+                text: root.visibleMessages.length === 0 ? ""
+                  : root.demoMode ? "Start of this computer's copy of the chat"
+                  : !root.service ? ""
+                  : root.service.loadingOlder ? "Loading older messages…"
+                  : !root.service.hasOlderMessages ? "Start of this computer's copy of the chat" : ""
+                color: root.dimmer
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+              Rectangle {
+                id: backfillAction
+                objectName: "historyBackfillAction"
+                visible: root.backfillActionVisible
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: backfillActionLabel.implicitWidth + Style.space(22)
+                height: Style.space(30)
+                radius: Style.cornerRadius
+                color: backfillActionHover.hovered ? Style.hoverFillFor(root.foreground, root.accent)
+                  : Style.normalFillFor(root.foreground, root.accent)
+                Text {
+                  textFormat: Text.PlainText
+                  id: backfillActionLabel
+                  objectName: "historyBackfillActionLabel"
+                  anchors.centerIn: parent
+                  text: root.backfillActionText
+                  color: root.accent
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                }
+                HoverHandler { id: backfillActionHover; cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: root.requestHistoryBackfill() }
+              }
+              Text {
+                textFormat: Text.PlainText
+                objectName: "historyBackfillStatus"
+                visible: text !== ""
+                width: parent.width
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                text: root.backfillStatusText
+                color: root.backfillState === "failed" ? root.urgent : root.dimmer
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
             }
           }
 

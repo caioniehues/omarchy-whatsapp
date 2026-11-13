@@ -284,3 +284,20 @@ replacement, group subject preference/rename/search, and malformed/oversized MCP
 frames followed by valid pings. All data is synthetic. The dependency patch also
 contains a group-name fallback test. No private store or network mutation is
 needed to establish these guarantees.
+
+## Own profile and older history
+
+`test_profile_history.py` drives the helper against a synthetic private wacli
+that records its real argv and `/proc` command line: profile names, About text
+and photo paths travel only on the stdin transport, a value starting with a
+dash stays a value, each change needs its own authorization, out-of-bounds or
+multi-line text and photos that are not small regular JPEG or PNG files are
+refused before dispatch, a photo is sent from a private copy that is removed
+afterwards, a profile check pauses sync once for both reads, offline mode
+refuses every remote profile read, change and history request, and a history
+request is one bounded batch for one exact rail chat that is never retried.
+`tst_profile_operations.qml` and `tst_profile_panel.qml` cover the requests
+the panel builds, the explicit confirmation of every change, paused accounts
+and the in-memory demo profiles; `tst_history_backfill.qml` and
+`tst_app_chrome.qml` cover the top-of-timeline offer, its states, the chat a
+reply belongs to, and the synthetic demo history.

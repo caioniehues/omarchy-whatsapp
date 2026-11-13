@@ -32,12 +32,15 @@ MODULE_DIRECTORY = str(Path(__file__).resolve().parent)
 if MODULE_DIRECTORY not in sys.path:
     sys.path.insert(0, MODULE_DIRECTORY)
 try:
-    from omawhatsapp_assets import AvatarCache, AvatarCacheError, fetch_https_image
+    from omawhatsapp_assets import (
+        MAX_AVATAR_BYTES, AvatarCache, AvatarCacheError, fetch_https_image,
+    )
 except ModuleNotFoundError as exc:
     if exc.name != "omawhatsapp_assets":
         raise
     AvatarCache = None
     fetch_https_image = None
+    MAX_AVATAR_BYTES = 1024 * 1024
 
     class AvatarCacheError(RuntimeError):
         pass
@@ -717,6 +720,20 @@ NOTIFY_IDS_FILE = "notify-ids.json"
 MAX_NOTIFY_IDS = 64
 NOTIFY_ID_TTL = 60 * 60
 MAX_NOTIFY_IDS_STATE = 16 * 1024
+# Your own name and About text per account, as last read from or set on
+# WhatsApp here. Keyed by a digest of the account's store.
+PROFILES_FILE = "profiles.json"
+MAX_PROFILES_STATE = 16 * 1024
+# WhatsApp's own limits for a profile name and About text, in characters.
+MAX_PROFILE_NAME = 25
+MAX_PROFILE_ABOUT = 139
+# A new profile photo: JPEG or PNG only, read once into a private copy.
+MAX_PROFILE_PHOTO = 10 * 1024 * 1024
+# One explicit request for older history asks the phone for this many
+# messages at most, in a single batch, and waits this long for the answer.
+DEFAULT_BACKFILL_COUNT = 50
+MAX_BACKFILL_COUNT = 100
+BACKFILL_WAIT_SECONDS = 30
 SYNC_UNIT = "wacli-sync.service"
 SYNC_UNIT_TEMPLATE = "wacli-sync@{name}.service"
 SYNC_UNIT_NAME = re.compile(
@@ -6808,6 +6825,334 @@ class Backend:
             business = {}
         return {"ok": True, "kind": "contact-profile", "about": about[:1024], "business": business}
 
+    # Your own profile. Reading it asks WhatsApp (remote-read); changing it is
+    # a WhatsApp write the request authorizes explicitly. Values travel to
+    # wacli only on the private stdin transport, never in a process argv.
+
+    @staticmethod
+    def _profile_state_key(account: Account) -> str:
+        return hashlib.sha256(account.key.encode("utf-8")).hexdigest()[:24]
+
+    def _saved_profile(self, account: Account) -> dict[str, Any]:
+        value = self._read_state_json(PROFILES_FILE, MAX_PROFILES_STATE, {})
+        item = value.get(self._profile_state_key(account)) if isinstance(value, dict) else None
+        item = item if isinstance(item, dict) else {}
+        return {
+            "name": str(item.get("name") or "")[:MAX_PROFILE_NAME],
+            "about": str(item.get("about") or "")[:MAX_PROFILE_ABOUT],
+            "checked_at": bounded_int(item.get("checked_at"), 0, 0, 2**63 - 1),
+        }
+
+    def _remember_profile(self, account: Account, **fields: Any) -> None:
+        """Best effort: a confirmed change must never read as a failure."""
+        key = self._profile_state_key(account)
+        try:
+            with self._state_lock("profiles.lock"):
+                current = self._read_state_json(PROFILES_FILE, MAX_PROFILES_STATE, {})
+                current = current if isinstance(current, dict) else {}
+                item = dict(self._saved_profile(account))
+                item.update(fields)
+                current.pop(key, None)
+                current[key] = item
+                self._write_state_json(PROFILES_FILE,
+                                       dict(list(current.items())[-MAX_ACCOUNTS:]),
+                                       MAX_PROFILES_STATE)
+        except (OmaWhatsAppError, OSError):
+            pass
+
+    @staticmethod
+    def _profile_text(value: Any, limit: int, label: str) -> str:
+        if not isinstance(value, str):
+            raise OmaWhatsAppError(f"Your {label} must be text.")
+        text = value.strip()
+        if not text:
+            raise OmaWhatsAppError(f"Your {label} cannot be empty.")
+        if any(ord(char) < 32 or 0x7F <= ord(char) < 0xA0 for char in text):
+            raise OmaWhatsAppError(f"Your {label} must be one line of plain text.")
+        if len(text) > limit:
+            raise OmaWhatsAppError(f"Your {label} can have up to {limit} characters.")
+        return text
+
+    def _own_jid_or_empty(self) -> str:
+        try:
+            return self._own_jid(ask=True)
+        except OmaWhatsAppError:
+            return ""
+
+    def _local_own_name(self, own: str) -> str:
+        """The name the mirror's contacts list holds for this account itself."""
+        if not own:
+            return ""
+        try:
+            with closing(self._connect()) as connection:
+                row = connection.execute(
+                    """SELECT COALESCE(NULLIF(push_name, ''), NULLIF(full_name, ''),
+                         NULLIF(first_name, '')) AS name FROM contacts WHERE jid = ?""",
+                    [own]).fetchone()
+        except (OmaWhatsAppError, sqlite3.Error):
+            return ""
+        return str(row["name"] or "")[:MAX_PROFILE_NAME] if row is not None else ""
+
+    def _own_photo_key(self, account: Account, own: str) -> str:
+        return self._avatar_key(account, own) if own else ""
+
+    def own_profile(self) -> dict[str, Any]:
+        """Your name, About text and photo as this computer last saw them. Local only."""
+        account = self.active
+        own = self._own_jid_or_empty()
+        saved = self._saved_profile(account)
+        key = self._own_photo_key(account, own)
+        photo = self.avatar_cache.paths([key]).get(key, "") \
+            if key and self.avatar_cache is not None else ""
+        user = own.split("@", 1)[0]
+        return {
+            "ok": True, "kind": "profile", "account": account.name,
+            "linked": bool(own),
+            "name": saved["name"] or self._local_own_name(own),
+            "about": saved["about"],
+            "phone": "+" + user if own.endswith("@s.whatsapp.net") and user.isdigit() else "",
+            "photo_path": photo,
+            "checked_at": saved["checked_at"],
+            "online": self.online(account),
+        }
+
+    def _profile_reads(self, account: Account, commands: list[list[str]]) -> list[
+            subprocess.CompletedProcess[str]]:
+        """Run remote profile reads while yielding this account's sync only once."""
+        offline = "Offline mode is on. Go online before connecting to or changing WhatsApp."
+        if not self.online(account):
+            raise OmaWhatsAppError(offline)
+        results: list[subprocess.CompletedProcess[str]] = []
+        with self._state_lock(self._lifecycle_lock_name(account)):
+            if not self.online(account):
+                raise OmaWhatsAppError(offline)
+            active = self._yield_active_sync(account)
+            operation_error: BaseException | None = None
+            try:
+                for command in commands:
+                    results.append(self._run_after_sync_yield(command, timeout=30, account=account))
+            except BaseException as exc:
+                operation_error = exc
+            try:
+                self._restore_yielded_sync(account, active)
+            except OmaWhatsAppError as exc:
+                raise OmaWhatsAppPartialError(
+                    "Your profile was read, but background sync could not restart.",
+                    {"kind": "lifecycle", "committed": False, "account": account.name},
+                ) from exc
+            if operation_error is not None:
+                raise operation_error
+        return results
+
+    def refresh_own_profile(self, authorization: str = "") -> dict[str, Any]:
+        """Ask WhatsApp for your About text and photo after an explicit click."""
+        if authorization != "remote-read":
+            raise OmaWhatsAppError("This asks WhatsApp; pass authorization='remote-read'.")
+        account = self.active
+        if not self.online(account):
+            raise OmaWhatsAppError(
+                "Offline mode is on. Go online before connecting to or changing WhatsApp."
+            )
+        own = self._own_jid(ask=True)
+        if not own:
+            raise OmaWhatsAppError("Link this account before reading its profile.")
+        key = self._own_photo_key(account, own)
+        cache = self.avatar_cache
+        picture_id = ""
+        if cache is not None and cache.paths([key]):
+            picture_id = str(cache.entries([key]).get(key, {}).get("picture_id") or "")
+        picture = ["--json", "profile", "picture-info", "--jid", own, "--preview"]
+        if picture_id:
+            picture.extend(["--existing-id", picture_id])
+        about_result, picture_result = self._profile_reads(
+            account, [["--json", "profile", "get-about", "--jid", own], picture])
+        about_data = self._envelope(about_result).get("data")
+        about = str(about_data.get("about") or "").strip() if isinstance(about_data, dict) else ""
+        now = int(time.time())
+        self._remember_profile(account, about=about[:MAX_PROFILE_ABOUT], checked_at=now)
+        photo_failed = False
+        try:
+            data = self._envelope(picture_result).get("data")
+            data = data if isinstance(data, dict) else {}
+            update: dict[str, Any] = {"key": key, "picture_id": str(data.get("id") or picture_id),
+                                      "checked_at": now, "missing": False}
+            if data.get("unchanged") is True:
+                pass
+            elif data.get("url"):
+                if fetch_https_image is None:
+                    raise AvatarCacheError("The profile-photo cache module is not installed.")
+                update["data"] = fetch_https_image(str(data["url"]))
+            else:
+                update["missing"] = True
+            if cache is not None:
+                cache.update([update])
+        except (OmaWhatsAppError, AvatarCacheError):
+            photo_failed = True
+        return dict(self.own_profile(), photo_failed=photo_failed)
+
+    def set_own_profile(self, field: str, value: Any, authorization: str = "") -> dict[str, Any]:
+        """Change your WhatsApp name or About text."""
+        if authorization != "whatsapp-write":
+            raise OmaWhatsAppError(
+                "Changing your profile changes WhatsApp; pass authorization='whatsapp-write'."
+            )
+        if field == "name":
+            text = self._profile_text(value, MAX_PROFILE_NAME, "name")
+            leaf = "set-name"
+        elif field == "about":
+            text = self._profile_text(value, MAX_PROFILE_ABOUT, "About text")
+            leaf = "set-about"
+        else:
+            raise OmaWhatsAppError("That part of your profile cannot be changed here.")
+        account = self.active
+        # "--" keeps a value that starts with a dash from reading as a flag.
+        self._envelope(self._write(["--json", "profile", leaf, "--", text], timeout=60))
+        self._remember_profile(account, **{field: text})
+        return dict(self.own_profile(), changed=field)
+
+    @staticmethod
+    def _read_profile_photo(path: Any) -> bytes:
+        """One bounded read of a regular JPEG or PNG file, without following links."""
+        raw = str(path or "")
+        if raw.startswith("file://"):
+            raw = unquote(urlparse(raw).path)
+        if not raw or len(raw) > 4096 or "\0" in raw or not os.path.isabs(raw):
+            raise OmaWhatsAppError("Choose a photo file.")
+        flags = os.O_RDONLY | os.O_CLOEXEC | os.O_NONBLOCK
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(raw, flags)
+        except OSError as exc:
+            raise OmaWhatsAppError("That photo could not be opened.") from exc
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise OmaWhatsAppError("Choose a photo file.")
+            if metadata.st_size > MAX_PROFILE_PHOTO:
+                raise OmaWhatsAppError("A profile photo can be up to 10 MB.")
+            output = bytearray()
+            while len(output) <= MAX_PROFILE_PHOTO:
+                chunk = os.read(descriptor, min(65_536, MAX_PROFILE_PHOTO + 1 - len(output)))
+                if not chunk:
+                    break
+                output.extend(chunk)
+        except OSError as exc:
+            raise OmaWhatsAppError("That photo could not be read.") from exc
+        finally:
+            os.close(descriptor)
+        if len(output) > MAX_PROFILE_PHOTO:
+            raise OmaWhatsAppError("A profile photo can be up to 10 MB.")
+        data = bytes(output)
+        if not (data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG\r\n\x1a\n")):
+            raise OmaWhatsAppError("A profile photo must be a JPEG or PNG image.")
+        return data
+
+    @contextmanager
+    def _staged_profile_photo(self, data: bytes) -> Iterator[Path]:
+        """A private copy of the checked bytes, so the file cannot change under wacli."""
+        folder = self.state_dir / "outgoing"
+        suffix = ".png" if data.startswith(b"\x89PNG") else ".jpg"
+        copy = folder / f"profile-{secrets.token_hex(12)}{suffix}"
+        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        try:
+            try:
+                folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+                descriptor = os.open(copy, flags, 0o600)
+                try:
+                    view = memoryview(data)
+                    while view:
+                        view = view[os.write(descriptor, view):]
+                finally:
+                    os.close(descriptor)
+            except OSError as exc:
+                raise OmaWhatsAppError("That photo could not be prepared privately.") from exc
+            yield copy
+        finally:
+            copy.unlink(missing_ok=True)
+
+    def set_own_photo(self, path: Any, authorization: str = "") -> dict[str, Any]:
+        """Replace your WhatsApp profile photo with one JPEG or PNG file."""
+        if authorization != "whatsapp-write":
+            raise OmaWhatsAppError(
+                "Changing your profile changes WhatsApp; pass authorization='whatsapp-write'."
+            )
+        data = self._read_profile_photo(path)
+        account = self.active
+        with self._staged_profile_photo(data) as staged:
+            envelope = self._envelope(self._write(
+                ["--json", "profile", "set-picture", "--", str(staged)], timeout=90))
+        result = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+        own = self._own_jid_or_empty()
+        if own and self.avatar_cache is not None:
+            # Show the new photo at once when it fits the cache; otherwise the
+            # next profile refresh downloads WhatsApp's resized copy.
+            update: dict[str, Any] = {"key": self._own_photo_key(account, own),
+                                      "picture_id": str(result.get("picture_id") or ""),
+                                      "checked_at": int(time.time()), "missing": False}
+            if len(data) <= MAX_AVATAR_BYTES:
+                update["data"] = data
+            else:
+                update.update(checked_at=0, missing=True)
+            try:
+                self.avatar_cache.update([update])
+            except AvatarCacheError:
+                pass
+        return dict(self.own_profile(), changed="photo")
+
+    def remove_own_photo(self, authorization: str = "") -> dict[str, Any]:
+        """Remove your WhatsApp profile photo."""
+        if authorization != "destructive":
+            raise OmaWhatsAppError(
+                "Removing your profile photo needs authorization='destructive'."
+            )
+        account = self.active
+        self._envelope(self._write(["--json", "profile", "remove-picture"], timeout=60))
+        own = self._own_jid_or_empty()
+        if own and self.avatar_cache is not None:
+            try:
+                self.avatar_cache.update([{"key": self._own_photo_key(account, own),
+                                           "picture_id": "", "checked_at": int(time.time()),
+                                           "missing": True}])
+            except AvatarCacheError:
+                pass
+        return dict(self.own_profile(), changed="photo")
+
+    def history_backfill(self, jid: str, count: Any = DEFAULT_BACKFILL_COUNT,
+                         authorization: str = "") -> dict[str, Any]:
+        """Ask the phone once for one bounded batch of this chat's older messages.
+
+        wacli anchors the request at the oldest message stored here and runs a
+        one-off sync that stores the answer. Never retried: the user asks again.
+        """
+        if authorization != "sync":
+            raise OmaWhatsAppError(
+                "Asking your phone for older messages needs authorization='sync'."
+            )
+        chat = self._chat(jid)
+        requested = bounded_int(count, DEFAULT_BACKFILL_COUNT, 1, MAX_BACKFILL_COUNT)
+        command = ["--json", "history", "backfill", "--chat", chat["jid"],
+                   "--count", str(requested), "--requests", "1",
+                   "--wait", f"{BACKFILL_WAIT_SECONDS}s", "--idle-exit", "5s"]
+        try:
+            # wacli may retry one unanswered batch itself, so allow two waits.
+            result = self._mutate(command, timeout=2 * BACKFILL_WAIT_SECONDS + 40,
+                                  require_online=True)
+        except OmaWhatsAppTimeout as exc:
+            raise OmaWhatsAppError(
+                "Your phone did not answer in time. Nothing more was asked; try again later."
+            ) from exc
+        data = self._envelope(result).get("data")
+        data = data if isinstance(data, dict) else {}
+        return {
+            "ok": True, "kind": "history-backfill", "jid": chat["jid"],
+            "requested": requested,
+            "added": bounded_int(data.get("messages_added"), 0, 0, 1_000_000),
+            "answered": bounded_int(data.get("responses_seen"), 0, 0, 1_000) > 0,
+        }
+
     GROUP_INVITE = re.compile(r"^(?:https?://)?(?:chat\.whatsapp\.com/(?:invite/)?)?([A-Za-z0-9]{16,32})/?$")
 
     def create_group(self, name: Any, participants: Any) -> dict[str, Any]:
@@ -8370,6 +8715,8 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("contact-alias")
     commands.add_parser("contact-tag")
     commands.add_parser("contact-profile")
+    commands.add_parser("profile")
+    commands.add_parser("history-backfill")
     commands.add_parser("join-group")
     commands.add_parser("delete-status")
     commands.add_parser("chat-action")
@@ -8643,6 +8990,24 @@ def main() -> int:
         if args.command == "contact-profile":
             return emit(backend.contact_profile(str(payload.get("person") or ""),
                                                 str(payload.get("authorization") or "")))
+        if args.command == "profile":
+            action = str(payload.get("action") or "show")
+            authorization = str(payload.get("authorization") or "")
+            if action == "show":
+                return emit(backend.own_profile())
+            if action == "refresh":
+                return emit(backend.refresh_own_profile(authorization))
+            if action in ("name", "about"):
+                return emit(backend.set_own_profile(action, payload.get("value"), authorization))
+            if action == "photo":
+                return emit(backend.set_own_photo(payload.get("path"), authorization))
+            if action == "remove-photo":
+                return emit(backend.remove_own_photo(authorization))
+            raise OmaWhatsAppError("That profile action is not supported.")
+        if args.command == "history-backfill":
+            return emit(backend.history_backfill(str(payload.get("jid") or ""),
+                                                 payload.get("count", DEFAULT_BACKFILL_COUNT),
+                                                 str(payload.get("authorization") or "")))
         if args.command == "create-group":
             return emit(backend.create_group(payload.get("name"), payload.get("participants")))
         if args.command == "join-group":

@@ -45,7 +45,7 @@ implemented, `intentionally excluded` is deferred product scope, and
 | Communities | `groups.is_parent`, `linked_parent_jid` | intentionally excluded | later top-level section |
 | Calls history | `calls list` | intentionally excluded | later top-level section |
 | Status list/view | local `status_messages` | planned | text and downloaded media |
-| Settings/profile | `profile` commands | planned | read/update guarded flows |
+| Settings/profile | `profile` commands | building | read/update guarded flows |
 
 ## 2. Responsive structure
 
@@ -74,8 +74,8 @@ button must remain reachable at every supported size.
 | Remove local chat | `chats cleanup --jid ... --confirm` | done |
 | Remote chat deletion | transport gap in wacli | transport gap |
 | Per-chat text/reply/edit/attachment draft | local UI state | done |
-| Paginate local history | bounded SQLite cursor | planned |
-| Request older history | `history backfill` | planned |
+| Paginate local history | bounded SQLite cursor | done |
+| Request older history | `history backfill` | building |
 | Contact info | `contacts show`, profile picture metadata | planned |
 | Group member index / mention picker | participants + `send --mention` | building |
 | Group info surface | `groups info` | planned |
