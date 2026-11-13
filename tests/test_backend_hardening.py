@@ -234,10 +234,13 @@ class BackendHardeningTests(unittest.TestCase):
         cases = [
             subprocess.CompletedProcess([], 1, "", "failed"),
             subprocess.CompletedProcess([], 0, "not-json", ""),
-            self.completed({"accounts": []}),
+            self.completed({"accounts": "work"}),
+            # An empty list, or one with no default, is what wacli leaves
+            # after accounts remove; two defaults it never writes.
             self.completed({
                 "accounts": [
-                    {"name": "work", "store_dir": str(self.store), "default": False},
+                    {"name": "work", "store_dir": str(self.store / "work"), "default": True},
+                    {"name": "home", "store_dir": str(self.store / "home"), "default": True},
                 ]
             }),
         ]

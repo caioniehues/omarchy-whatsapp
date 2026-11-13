@@ -132,10 +132,10 @@ QT_QPA_PLATFORM=offscreen WAYLAND_DISPLAY=/nonexistent/omawhatsapp-test \
 ## Screenshot
 
 ```bash
-omarchy-shell io.github.moizibnyousaf.omawhatsapp closeApp
-omarchy-shell io.github.moizibnyousaf.omawhatsapp openApp '{"demo":true}'
-omarchy-shell io.github.moizibnyousaf.omawhatsapp openApp '{"demo":true,"viewer":true}'
-omarchy-shell io.github.moizibnyousaf.omawhatsapp openApp '{"demo":true,"voice":true}'
+omarchy-shell io.github.caioniehues.omawhatsapp closeApp
+omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true}'
+omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true,"viewer":true}'
+omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true,"voice":true}'
 ```
 
 Capture only that window. Never publish a real conversation timeline.

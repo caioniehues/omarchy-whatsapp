@@ -9,7 +9,7 @@ TestCase {
   id: testCase
   name: "HelperVersion"
 
-  Component { id: serviceComponent; Oma.Service { manifest: ({ id: "io.github.moizibnyousaf.omawhatsapp", version: "0.15.0" }) } }
+  Component { id: serviceComponent; Oma.Service { manifest: ({ id: "io.github.caioniehues.omawhatsapp", version: "0.15.0" }) } }
 
   function status(service, payload, stderrText) {
     var process = findChild(service, "statusProcess")

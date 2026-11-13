@@ -9,7 +9,7 @@ TestCase {
   id: testCase
   name: "ServiceSetup"
 
-  Component { id: serviceComponent; Oma.Service { manifest: ({ id: "io.github.moizibnyousaf.omawhatsapp", version: "0.15.0" }) } }
+  Component { id: serviceComponent; Oma.Service { manifest: ({ id: "io.github.caioniehues.omawhatsapp", version: "0.15.0" }) } }
 
   function status(service, setup, extra) {
     var process = findChild(service, "statusProcess")
@@ -125,9 +125,9 @@ TestCase {
     verify(service.removeFromComputer())
     compare(JSON.parse(findChild(service, "setupProcess").payload), { confirm: "remove" })
     finishSetup(service, { ok: true, kind: "teardown", removed: ["x"],
-      remove_command: "omarchy plugin remove io.github.moizibnyousaf.omawhatsapp" })
+      remove_command: "omarchy plugin remove io.github.caioniehues.omawhatsapp" })
     compare(done, ["teardown"])
-    compare(service.lastTeardown.remove_command, "omarchy plugin remove io.github.moizibnyousaf.omawhatsapp")
+    compare(service.lastTeardown.remove_command, "omarchy plugin remove io.github.caioniehues.omawhatsapp")
   }
 
   function test_an_old_wacli_keeps_the_welcome_until_it_is_updated() {

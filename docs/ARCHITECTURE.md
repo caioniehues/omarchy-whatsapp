@@ -74,6 +74,10 @@ instead of emptying it. Everything downstream of a row stays inside that row's
 account: its mirror resolves the exact chat, its store scopes the badge
 acknowledgement and the popup watermark, its unit is the one paused when the
 store lock is contended, and its offline choice governs only its own writes.
+The account list is the exception: wacli rewrites `config.yaml` under the
+lock of the folder that holds it, which is the root store, so adding, removing
+or choosing the default account pauses the root account's sync for that write
+alone, whichever account it is for.
 Rail account filters are a pure view over those already-scoped rows; selecting
 a filter never rewrites or infers a chat target. The explicit `+` flow delegates
 linking to a terminal and keeps an existing root session addressable as

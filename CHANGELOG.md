@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.20.0 — Merged fork
+
+- Merge [atoslins/Omarchy-WhatsApp-v2](https://github.com/atoslins/Omarchy-WhatsApp-v2)
+  0.16.5–0.16.9 into OmaWhatsApp 0.19.1:
+  - Keep attachments picked in the bar dropdown (Renato, atoslins #21).
+  - Pause the root account's sync only while the wacli account list changes,
+    so adding, removing or resuming a named account no longer fails on its lock;
+    `accounts add NAME` from the agent gateway links like the app does
+    (atoslins #22).
+- Cap group-mention resolution at 64 distinct tokens per page and stop the scan
+  there (from atoslins #19, applied to OmaWhatsApp's cached resolver).
+- Not taken from atoslins: its mention resolver (#8), since OmaWhatsApp already
+  resolves mentions with its own cache and deadline; its avatar `sourceSize`
+  (#16, #17), since OmaWhatsApp's isolated media worker already decodes at twice
+  the drawn size; and its sticker `playing` guard (#23), which targets Qt's
+  `AnimatedImage`, replaced here by the bounded frame reader in 0.18.1.
+- New plugin ID `io.github.caioniehues.omawhatsapp`. Setup recognizes both
+  `io.github.moizibnyousaf.omawhatsapp` and `io.github.atoslins.whatsapp` and
+  offers to turn off whichever is enabled; the linked device and history stay.
+
 ## 0.19.1 — Reliable attachment saves
 
 - Make Save as work from the bar dropdown as well as the full app. Keep the

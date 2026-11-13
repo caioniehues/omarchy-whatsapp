@@ -586,6 +586,13 @@ TestCase {
     return list.itemAtIndex(index)
   }
 
+  function test_app_uses_omarchy_theme_colors_with_qt_color_type_imported() {
+    var h = createHarness()
+    compare(h.app.foreground, "#eeeeee")
+    compare(h.app.background, "#111111")
+    compare(h.app.accent, "#66ccaa")
+  }
+
   function test_the_chat_list_shows_the_tick_of_your_last_message() {
     // As on the phone: your last message shows its tick instead of "You ·".
     var read = Object.assign({}, workChat, { last_from_me: true, last_status: "read", preview: "see you" })

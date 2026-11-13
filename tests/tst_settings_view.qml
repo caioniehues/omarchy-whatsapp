@@ -66,7 +66,7 @@ TestCase {
       property bool setupKnown: true
       property bool setupWriting: false
       property var lastTeardown: null
-      property string pluginId: "io.github.moizibnyousaf.omawhatsapp"
+      property string pluginId: "io.github.caioniehues.omawhatsapp"
       function runSetup(agents, replaceOriginal) { record("runSetup", [agents, replaceOriginal]); return true }
       function removeFromComputer() { record("removeFromComputer", []); return true }
       function removePlugin() { record("removePlugin", []); return true }
@@ -394,7 +394,7 @@ TestCase {
     compare(last(h.service).name, "removeFromComputer")
     verify(!h.view.removeConfirming)
     verify(findChild(h.view, "setting-remove_plugin") === null, "the app itself only after that")
-    h.service.lastTeardown = { ok: true, remove_command: "omarchy plugin remove io.github.moizibnyousaf.omawhatsapp" }
+    h.service.lastTeardown = { ok: true, remove_command: "omarchy plugin remove io.github.caioniehues.omawhatsapp" }
     wait(0)
     findChild(h.view, "setting-remove_plugin").clicked()
     compare(last(h.service).name, "removePlugin")

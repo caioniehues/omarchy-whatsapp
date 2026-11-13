@@ -139,6 +139,11 @@ Use it only when the user explicitly requests linking or a foreground sync:
 
 The helper pauses the resident default sync service when necessary and
 restores it afterward. It never overrides OmaWhatsApp's explicit offline mode.
+`accounts add NAME` links the way the app's Link does: the helper writes the
+account (pausing the root account's sync, which holds the account list's lock,
+for that write alone), shows the QR code, and starts the new account's sync.
+Auth flags such as `--phone` or `--qr-format` pass through; `--account` and
+`--store` do not apply.
 
 ## High-impact boundaries
 

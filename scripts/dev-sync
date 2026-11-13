@@ -12,7 +12,7 @@ set -euo pipefail
 
 repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 user_home=${HOME:?HOME is required}
-plugin_id=io.github.moizibnyousaf.omawhatsapp
+plugin_id=io.github.caioniehues.omawhatsapp
 config_home=${XDG_CONFIG_HOME:-$user_home/.config}
 plugin_target="$config_home/omarchy/plugins/$plugin_id"
 

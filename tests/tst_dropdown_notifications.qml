@@ -95,6 +95,59 @@ TestCase {
 
   Component { id: spyComponent; SignalSpy {} }
 
+  function test_file_picker_restores_the_compact_conversation_with_its_draft() {
+    var dropdown = createTemporaryObject(dropdownComponent, testCase)
+    dropdown.openDemo()
+    dropdown.openConversation(dropdown.demoChats[0])
+    var composer = findChild(dropdown, "composerInput")
+    composer.text = "draft caption"
+    dropdown.pendingAttachments = ["file:///tmp/already.pdf"]
+    dropdown.openFilePicker()
+    var picker = findChild(dropdown, "dropdownFilePickerProcess")
+    verify(picker !== null)
+    verify(picker.running)
+    compare(dropdown.opened, false, "the native picker owns the pointer")
+    picker.stdout.text = "/tmp/report with spaces.pdf\n/tmp/photo.png\n"
+    picker.running = false
+    picker.exited(0)
+    verify(dropdown.opened)
+    compare(dropdown.viewMode, "conversation")
+    compare(dropdown.currentChat.jid, "demo-team")
+    compare(composer.text, "draft caption")
+    compare(dropdown.pendingAttachments,
+      ["file:///tmp/already.pdf", "file:///tmp/report%20with%20spaces.pdf", "file:///tmp/photo.png"])
+  }
+
+  function test_canceling_file_selection_restores_the_unchanged_draft() {
+    var dropdown = createTemporaryObject(dropdownComponent, testCase)
+    dropdown.openDemo()
+    dropdown.openConversation(dropdown.demoChats[0])
+    var composer = findChild(dropdown, "composerInput")
+    composer.text = "keep this draft"
+    dropdown.pendingAttachments = ["file:///tmp/keep.pdf"]
+    dropdown.openFilePicker()
+    var picker = findChild(dropdown, "dropdownFilePickerProcess")
+    picker.running = false
+    picker.exited(1)
+    verify(dropdown.opened)
+    compare(composer.text, "keep this draft")
+    compare(dropdown.pendingAttachments, ["file:///tmp/keep.pdf"])
+  }
+
+  function test_file_selection_cannot_attach_to_another_account_with_the_same_chat_id() {
+    var dropdown = createTemporaryObject(dropdownComponent, testCase)
+    dropdown.openDemo()
+    dropdown.openConversation({ account: "work", jid: "shared@example", name: "Work" })
+    dropdown.openFilePicker()
+    var picker = findChild(dropdown, "dropdownFilePickerProcess")
+    dropdown.openConversation({ account: "personal", jid: "shared@example", name: "Personal" })
+    picker.stdout.text = "/tmp/work-only.pdf\n"
+    picker.running = false
+    picker.exited(0)
+    compare(dropdown.pendingAttachments, [])
+    compare(dropdown.opened, false, "a stale dialog must not reopen a different conversation")
+  }
+
   function test_clear_all_requires_confirmation_and_stays_local() {
     var dropdown = createTemporaryObject(dropdownComponent, testCase)
     verify(dropdown !== null)

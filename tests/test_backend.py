@@ -102,6 +102,11 @@ class BackendTests(unittest.TestCase):
         environment = mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)})
         environment.start()
         self.addCleanup(environment.stop)
+        # Likewise the wacli account list: never this machine's own.
+        account_list = mock.patch.object(
+            backend_module, "ACCOUNT_CONFIG", self.root / "config.yaml")
+        account_list.start()
+        self.addCleanup(account_list.stop)
         self.store = self.root / "wacli"
         self.store.mkdir()
         self.wacli = self.root / "wacli-bin"
@@ -1282,6 +1287,17 @@ class BackendTests(unittest.TestCase):
         with mock.patch.object(self.backend, "_mention_names") as lookup:
             self.backend._resolve_mentions(items, ("text",))
         lookup.assert_not_called()
+
+    def test_a_page_of_mentions_resolves_only_the_first_distinct_tokens(self) -> None:
+        # Sender-controlled text: thousands of distinct "@number" tokens must
+        # not grow the lookup past the cap, and repeats count once.
+        tokens = [f"{10_000_000 + n}" for n in range(5000)]
+        items = [{"text": " ".join(["@" + tokens[0]] * 3 + ["@" + t for t in tokens])}]
+        with mock.patch.object(self.backend, "_mention_names", return_value={}) as lookup:
+            self.backend._resolve_mentions(items, ("text",))
+        cap = backend_module.MAX_MENTIONS_PER_PAGE
+        self.assertEqual(lookup.call_args.args[0], set(tokens[:cap]),
+                         "the first distinct tokens, up to the cap")
 
     def _insert_sticker(self, msg_id: str, ts: int, sha: bytes, path: str = "") -> None:
         with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
@@ -3926,14 +3942,16 @@ sys.exit(0)
         known = [*current, new]
         with mock.patch.object(
                 self.backend, "accounts", side_effect=[current, known]), \
+                mock.patch.object(self.backend, "_add_account_entry") as add, \
                 mock.patch.object(
                     self.backend, "_transport_interactive",
-                    return_value=(0, current[0], ("accounts", "add")),
+                    return_value=(0, new, ("auth",)),
                 ) as interactive, \
                 mock.patch.object(self.backend, "_systemctl_user") as systemctl:
             self.assertEqual(self.backend.link_account("travel", "interactive"), 0)
+        add.assert_called_once_with("travel")
         interactive.assert_called_once_with(
-            ["accounts", "add", "travel"], authorization="interactive"
+            ["auth"], authorization="interactive", account="travel"
         )
         systemctl.assert_called_once_with(
             ["enable", "--now", "wacli-sync@travel.service"]
@@ -3948,9 +3966,10 @@ sys.exit(0)
 
         def committed(*args, **kwargs):
             (travel_store / "session.db").write_bytes(b"synthetic-session")
-            return 1, current[0], ("accounts", "add")
+            return 1, new, ("auth",)
 
         with mock.patch.object(self.backend, "accounts", side_effect=[current, [*current, new]]), \
+                mock.patch.object(self.backend, "_add_account_entry"), \
                 mock.patch.object(
                     self.backend, "_transport_interactive", side_effect=committed), \
                 mock.patch.object(self.backend, "_systemctl_user") as systemctl:
@@ -3969,9 +3988,10 @@ sys.exit(0)
         current = [self.backend.account("work"), self.backend.account("home")]
         with mock.patch.object(
                 self.backend, "accounts", side_effect=[current, [*current, new]]), \
+                mock.patch.object(self.backend, "_add_account_entry"), \
                 mock.patch.object(
                     self.backend, "_transport_interactive",
-                    return_value=(0, current[0], ("accounts", "add")),
+                    return_value=(0, new, ("auth",)),
                 ), mock.patch.object(
                     self.backend, "_systemctl_user"
                 ) as systemctl, self.assertRaisesRegex(
@@ -4259,6 +4279,242 @@ sys.exit(0)
         self.backend.use_account("home")
         self.assertTrue(self.backend.online())
         self.assertEqual(self.backend._account_state()["acknowledged_unread"], {})
+
+
+class AccountListLockTests(unittest.TestCase):
+    """A root session syncing as primary while named accounts come and go
+    beside it."""
+
+    # wacli writes config.yaml under the lock of the folder that holds it,
+    # which is the root store; its running sync holds that lock throughout.
+    FAKE_WACLI = """#!/usr/bin/env python3
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(ROOT)
+args = sys.argv[1:]
+# The privacy-enabled build: arguments arrive over stdin.
+if args == ["--private-args-version"]:
+    print('{"protocol":1,"max_bytes":65536}')
+    sys.exit(0)
+if args == ["--private-args-stdin"]:
+    args = json.load(sys.stdin)
+if "--timeout" in args:
+    del args[args.index("--timeout"):args.index("--timeout") + 2]
+# The read-only credential probe after a link; not a write, so not logged.
+if args[:1] == ["--account"] and args[-1:] == ["doctor"]:
+    print(json.dumps({"success": True, "error": None, "data": {
+        "authenticated": (root / "accounts" / args[1] / "session.db").is_file()}}))
+    sys.exit(0)
+registry = root / "registry.json"
+names = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else []
+# Like wacli: the first account added becomes the default, and removing the
+# default leaves none.
+chosen = root / "default-account"
+default = chosen.read_text(encoding="utf-8") if chosen.exists() else ""
+syncing = (root / "sync-running").exists()
+with open(root / "calls.log", "a", encoding="utf-8") as log:
+    log.write(json.dumps({"args": args, "sync_running": syncing}) + "\\n")
+
+
+def store(name):
+    return root / "accounts" / name
+
+
+if args[-2:] == ["accounts", "list"]:
+    print(json.dumps({"success": True, "error": None, "data": {
+        "accounts": [{"name": name, "configured_store": "accounts/" + name,
+                      "store_dir": str(store(name)), "default": name == default}
+                     for name in names],
+        "config_path": str(root / "config.yaml"),
+        "default_account": default}}))
+    sys.exit(0)
+if "accounts" in args and args[args.index("accounts") + 1] in {"add", "remove", "use"}:
+    if syncing:
+        sys.stderr.write("lock account config: store is locked (another wacli is running?)\\n")
+        sys.exit(1)
+action = args[args.index("accounts") + 1] if "accounts" in args else ""
+if action == "remove":
+    name = args[args.index("remove") + 1]
+    registry.write_text(json.dumps([item for item in names if item != name]), encoding="utf-8")
+    if name == default:
+        chosen.write_text("", encoding="utf-8")
+    print(json.dumps({"success": True, "error": None, "data": {"removed": name}}))
+    sys.exit(0)
+if action == "use":
+    chosen.write_text(args[args.index("use") + 1], encoding="utf-8")
+    print(json.dumps({"success": True, "error": None,
+                      "data": {"default_account": args[args.index("use") + 1]}}))
+    sys.exit(0)
+if action == "add":
+    name = args[args.index("add") + 1]
+    registry.write_text(json.dumps([*names, name]), encoding="utf-8")
+    if not default:
+        chosen.write_text(name, encoding="utf-8")
+    (root / "config.yaml").write_text("accounts: {}\\n", encoding="utf-8")
+    store(name).mkdir(parents=True)
+    if "--no-auth" in args:
+        print(json.dumps({"success": True, "error": None, "data": {"name": name}}))
+    else:
+        (store(name) / "session.db").write_bytes(b"synthetic-session")
+    sys.exit(0)
+if args[:1] == ["--account"] and args[-2:] == ["auth", "logout"]:
+    (store(args[1]) / "session.db").unlink()
+    print(json.dumps({"success": True, "error": None, "data": {}}))
+    sys.exit(0)
+if args[:1] == ["--account"] and args[2:3] == ["auth"]:
+    (store(args[1]) / "session.db").write_bytes(b"synthetic-session")
+    sys.exit(0)
+sys.exit(2)
+"""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        runtime = self.root / "runtime"
+        runtime.mkdir(mode=0o700, exist_ok=True)
+        environment = mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": str(runtime)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.store = self.root / "wacli"
+        self.store.mkdir()
+        (self.store / "session.db").write_bytes(b"synthetic-session")
+        (self.store / "sync-running").touch()
+        self.wacli = self.root / "wacli-bin"
+        self.wacli.write_text(
+            self.FAKE_WACLI.replace("ROOT", repr(str(self.store))), encoding="utf-8")
+        self.wacli.chmod(0o700)
+        self.backend = backend_module.Backend(
+            store_dir=self.store, state_dir=self.root / "state", wacli=self.wacli,
+            account_config=self.store / "config.yaml",
+            unit_dir=installed_units(self.root),
+        )
+        self.systemctl: list[list[str]] = []
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def _systemctl(self, parts, require_success=True):
+        self.systemctl.append(list(parts))
+        marker = self.store / "sync-running"
+        code = 0
+        if parts[:2] == ["is-active", "--quiet"]:
+            code = 0 if parts[2] == "wacli-sync.service" and marker.exists() else 3
+        elif parts[-1] == "wacli-sync.service" and parts[0] == "stop":
+            marker.unlink()
+        elif parts[-1] == "wacli-sync.service" and parts[0] == "start":
+            marker.touch()
+        return subprocess.CompletedProcess(list(parts), code, "", "")
+
+    def _calls(self) -> list[dict]:
+        log = self.store / "calls.log"
+        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()]
+
+    def test_the_root_sync_yields_only_while_the_account_list_is_written(self) -> None:
+        self.assertEqual(self.backend.account("").name, "primary")
+        with mock.patch.object(self.backend, "_systemctl_user", side_effect=self._systemctl):
+            self.assertEqual(self.backend.link_account("second", "interactive"), 0)
+
+        self.assertTrue((self.store / "accounts" / "second" / "session.db").is_file())
+        self.assertTrue((self.store / "sync-running").exists())
+        changes = [parts for parts in self.systemctl if parts[0] != "is-active"]
+        self.assertEqual(changes, [
+            ["stop", "wacli-sync.service"],
+            ["start", "wacli-sync.service"],
+            ["enable", "--now", "wacli-sync@second.service"],
+        ])
+        writes = [call for call in self._calls() if call["args"][-2:] != ["accounts", "list"]]
+        added = [call for call in writes if "add" in call["args"]]
+        self.assertTrue(added and all("--no-auth" in call["args"] for call in added))
+        self.assertFalse(added[-1]["sync_running"])
+        # The QR code waits on the phone with the root account syncing again.
+        self.assertEqual(writes[-1], {
+            "args": ["--account", "second", "auth"], "sync_running": True,
+        })
+        self.assertEqual([account.name for account in self.backend.accounts()],
+                         ["primary", "second"])
+
+    def _named(self, name: str) -> None:
+        registry = self.store / "registry.json"
+        names = json.loads(registry.read_text(encoding="utf-8")) if registry.exists() else []
+        registry.write_text(json.dumps([*names, name]), encoding="utf-8")
+        chosen = self.store / "default-account"
+        if not chosen.exists() or not chosen.read_text(encoding="utf-8"):
+            chosen.write_text(name, encoding="utf-8")
+        (self.store / "config.yaml").write_text("accounts: {}\n", encoding="utf-8")
+        (self.store / "accounts" / name).mkdir(parents=True)
+        (self.store / "accounts" / name / "session.db").write_bytes(b"synthetic-session")
+        self.backend._refresh_account_registry()
+
+    def test_unlinking_a_named_account_drops_it_from_the_account_list(self) -> None:
+        self._named("second")
+        with mock.patch.object(self.backend, "_systemctl_user", side_effect=self._systemctl):
+            result = self.backend.unlink_account("second", "second")
+
+        self.assertTrue(result["removed"])
+        self.assertEqual([account.name for account in self.backend.accounts()], ["primary"])
+        self.assertFalse((self.store / "accounts" / "second" / "session.db").exists())
+        self.assertTrue((self.store / "sync-running").exists())
+        changes = [parts for parts in self.systemctl if parts[0] != "is-active"]
+        self.assertEqual(changes, [
+            ["disable", "--now", "wacli-sync@second.service"],
+            ["stop", "wacli-sync.service"],
+            ["start", "wacli-sync.service"],
+        ])
+        removals = [call for call in self._calls() if "remove" in call["args"]]
+        self.assertFalse(removals[-1]["sync_running"])
+
+    def test_unlinking_the_default_named_account_keeps_the_others(self) -> None:
+        self._named("second")
+        self._named("third")
+        with mock.patch.object(self.backend, "_systemctl_user", side_effect=self._systemctl):
+            self.assertTrue(self.backend.unlink_account("second", "second")["removed"])
+
+        # wacli now has no default, so plain wacli is the root store again.
+        self.assertEqual([(account.name, account.default) for account in self.backend.accounts()],
+                         [("primary", False), ("third", False)])
+        self.assertEqual(self.backend.account("").name, "primary")
+        self.assertEqual(self.backend.account("third").cli_args, ["--account", "third"])
+
+    def test_an_agent_changing_the_account_list_yields_the_root_sync(self) -> None:
+        self._named("second")
+        with mock.patch.object(self.backend, "_systemctl_user", side_effect=self._systemctl):
+            result = self.backend.transport({
+                "args": ["accounts", "use", "second"],
+                "authorization": "local-write", "account": "second",
+            })
+
+        self.assertTrue(result["ok"], result)
+        self.assertTrue((self.store / "sync-running").exists())
+        changes = [parts for parts in self.systemctl if parts[0] != "is-active"]
+        self.assertEqual(changes, [["stop", "wacli-sync.service"],
+                                   ["start", "wacli-sync.service"]])
+        uses = [call for call in self._calls() if "use" in call["args"]]
+        self.assertFalse(uses[-1]["sync_running"])
+
+    def test_an_agent_terminal_link_runs_like_the_app_link(self) -> None:
+        with mock.patch.object(self.backend, "_systemctl_user", side_effect=self._systemctl):
+            with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "names its own"):
+                self.backend.transport_interactive(
+                    ["accounts", "add", "third"], authorization="interactive", account="primary")
+            self.assertEqual(self.backend.transport_interactive(
+                ["--", "accounts", "add", "third", "--qr-format", "text"],
+                authorization="interactive",
+            ), 0)
+
+        self.assertTrue((self.store / "accounts" / "third" / "session.db").is_file())
+        changes = [parts for parts in self.systemctl if parts[0] != "is-active"]
+        self.assertEqual(changes, [
+            ["stop", "wacli-sync.service"],
+            ["start", "wacli-sync.service"],
+            ["enable", "--now", "wacli-sync@third.service"],
+        ])
+        writes = [call for call in self._calls() if call["args"][-2:] != ["accounts", "list"]]
+        self.assertEqual(writes[-1], {
+            "args": ["--account", "third", "auth", "--qr-format", "text"],
+            "sync_running": True,
+        })
 
 
 if __name__ == "__main__":

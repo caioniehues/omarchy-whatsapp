@@ -471,7 +471,7 @@ def version_tuple(text: str) -> tuple[int, ...]:
 # --store or WACLI_STORE_DIR points somewhere else.
 ACCOUNT_CONFIG = STATE_HOME / "wacli" / "config.yaml"
 SYSTEMCTL = Path("/usr/bin/systemctl")
-PLUGIN_ID = "io.github.moizibnyousaf.omawhatsapp"
+PLUGIN_ID = "io.github.caioniehues.omawhatsapp"
 PLUGINS_DIR = absolute_environment_path(
     "XDG_CONFIG_HOME", HOME / ".config") / "omarchy" / "plugins"
 PLUGIN_DIR = PLUGINS_DIR / PLUGIN_ID
@@ -485,9 +485,9 @@ UNIT_MARKERS = ("OmaWhatsApp", "OmaWhatsApp")
 SKILL_LINK = HOME / ".agents" / "skills" / "omawhatsapp"
 # Copies the old installer left beside the helper in ~/.local/bin.
 LEGACY_HELPER_COPIES = ("omawhatsapp_core.py", "omawhatsapp_assets.py")
-# The fork shares the helper name, the units and the state, so
-# only one of the two can run.
-ORIGINAL_PLUGIN_ID = "io.github.atoslins.whatsapp"
+# The forks this one merges share the helper name, the units and the state,
+# so only one of them can run.
+OTHER_PLUGIN_IDS = ("io.github.moizibnyousaf.omawhatsapp", "io.github.atoslins.whatsapp")
 OMARCHY = Path("/usr/bin/omarchy")
 GIT = Path("/usr/bin/git")
 ZENITY = Path("/usr/bin/zenity")
@@ -684,6 +684,9 @@ MENTION_LOOKUP_SECONDS = 2.0
 MENTION_MISS_TTL = 60 * 60
 # The "@" must not be the tail of a word, an email or another mention.
 MENTION_TOKEN = re.compile(r"(?<![\w.@%+-])@([0-9]{5,22})(?!\w)(?!\.[A-Za-z0-9])")
+# Mention text comes from senders: one page resolves at most this many distinct
+# tokens, and the scan stops once it has them.
+MAX_MENTIONS_PER_PAGE = 64
 # The sticker picker: recent distinct stickers, and how many missing files one
 # open may fetch (media download --read-only runs beside the live sync).
 MAX_STICKER_CHOICES = 60
@@ -882,7 +885,7 @@ SUPPORTED_CHAT_WHERE = f"""({chat_kind_sql()} = 'dm' OR (
 # (or newer) is accepted; leaves unknown to the registry keep failing closed.
 # Bumped with manifest.json (scripts/test checks it). The app compares it with
 # the plugin it loaded: an update that replaced only the plugin says so.
-HELPER_VERSION = "0.19.1"  # x-release-please-version
+HELPER_VERSION = "0.20.0"
 WACLI_MINIMUM_VERSION = "0.17.1"
 WACLI_PARITY_VERSION = "0.19.0"
 # Leaves that only exist from a given wacli release. The parity check accepts
@@ -1123,6 +1126,15 @@ WACLI_OPERATION_POLICIES: dict[tuple[str, ...], str] = {
     ("sync",): "sync",
     ("version",): "local-read",
 }
+
+# wacli rewrites config.yaml under the root store's lock for these.
+ACCOUNT_LIST_WRITES = frozenset({
+    ("accounts", "add"),
+    ("accounts", "remove"),
+    ("accounts", "use"),
+})
+
+
 class Account:
     """One wacli account: a name, the store it owns, and its sync unit.
 
@@ -1429,8 +1441,11 @@ class Backend:
             raise OmaWhatsAppError("Named wacli accounts could not be discovered safely.")
         data = envelope.get("data") if isinstance(envelope, dict) else None
         rows = data.get("accounts") if isinstance(data, dict) else None
-        if not isinstance(rows, list) or not rows or len(rows) > MAX_ACCOUNTS:
-            raise OmaWhatsAppError("The wacli account list is invalid or empty.")
+        if not isinstance(rows, list) or len(rows) > MAX_ACCOUNTS:
+            raise OmaWhatsAppError("The wacli account list is invalid.")
+        # Removing the last named account leaves wacli's config empty.
+        if not rows:
+            return implicit
         accounts: list[Account] = []
         for row in rows:
             if not isinstance(row, dict):
@@ -1452,8 +1467,9 @@ class Backend:
         if len({account.name for account in accounts}) != len(accounts) \
                 or len({account.key for account in accounts}) != len(accounts):
             raise OmaWhatsAppError("The wacli account list contains duplicate identities.")
-        if sum(account.default for account in accounts) != 1:
-            raise OmaWhatsAppError("The wacli account list must identify exactly one default.")
+        # Removing the default leaves none: plain wacli is then the root store.
+        if sum(account.default for account in accounts) > 1:
+            raise OmaWhatsAppError("The wacli account list names more than one default.")
         root_store = self.store_dir.resolve(strict=False)
         root_session = root_store / "session.db"
         if root_session.is_file() and all(account.store_dir != root_store for account in accounts):
@@ -1523,7 +1539,9 @@ class Backend:
         self._accounts = None
         self._active = None
 
-    def link_account(self, value: Any, authorization: Any) -> int:
+    def link_account(
+        self, value: Any, authorization: Any, auth_args: Sequence[str] = ()
+    ) -> int:
         """Interactively add or resume one named account in a terminal."""
         if str(authorization or "") != "interactive":
             raise OmaWhatsAppError(
@@ -1549,15 +1567,15 @@ class Backend:
                     and self._doctor(existing).get("authenticated") is True \
                     and self._sync_health(existing) != "relink-required":
                 raise OmaWhatsAppError(f"Account {name!r} is already linked.")
-            result, _, _ = self._transport_interactive(
-                ["auth"], authorization="interactive", account=name
-            )
         else:
             if len(accounts) >= MAX_ACCOUNTS:
                 raise OmaWhatsAppError("OmaWhatsApp already has the maximum number of accounts.")
-            result, _, _ = self._transport_interactive(
-                ["accounts", "add", name], authorization="interactive"
-            )
+            self._add_account_entry(name)
+            self._refresh_account_registry()
+        # A new account and an unfinished one both link the same way.
+        result, _, _ = self._transport_interactive(
+            ["auth", *auth_args], authorization="interactive", account=name
+        )
         self._refresh_account_registry()
         try:
             linked = self.account(name)
@@ -1568,6 +1586,45 @@ class Backend:
                 ) from exc
             return result
         return self._finalize_link(linked, result)
+
+    def _add_account_entry(self, name: str) -> None:
+        """Add a named account to wacli's config before its QR code is shown."""
+        result = self._change_account_list(
+            ["--json", "accounts", "add", name, "--no-auth"]
+        )
+        if self._locked(result):
+            raise OmaWhatsAppError(
+                "Another wacli command is using the account list. Close it and link again."
+            )
+        self._envelope(result)
+
+    def _change_account_list(
+        self,
+        args: list[str],
+        *,
+        timeout: float = 30,
+        stdout_limit: int = MAX_WACLI_OUTPUT,
+        stderr_limit: int = MAX_PROCESS_ERROR,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run one wacli command that rewrites config.yaml.
+
+        wacli changes config.yaml under the store lock of the folder that
+        holds it. That folder is also the root store, whose sync keeps the
+        lock for as long as it runs, so that sync yields for the write alone,
+        whichever account the command is for.
+        """
+        config_dir = self.account_config.parent.resolve(strict=False)
+        owner = next((candidate for candidate in self.accounts()
+                      if candidate.unit and candidate.store_dir == config_dir), None)
+        if owner is None:
+            return self._run(
+                args, timeout=timeout, stdout_limit=stdout_limit,
+                stderr_limit=stderr_limit, account=None,
+            )
+        return self._mutate(
+            args, timeout=timeout, require_online=False, stdout_limit=stdout_limit,
+            stderr_limit=stderr_limit, account=None, lifecycle=owner,
+        )
 
     def _finalize_link(self, account: Account, result: int) -> int:
         """Reconcile one terminal auth result and enable its sync exactly once."""
@@ -2793,13 +2850,14 @@ class Backend:
             os.close(descriptor)
         os.replace(temporary, target)
 
-    def _original_plugin(self) -> dict[str, bool]:
-        installed = (self.plugins_dir / ORIGINAL_PLUGIN_ID).exists()
-        enabled = False
+    def _other_plugins(self) -> tuple[list[str], list[str]]:
+        """The installed and the enabled ids among OTHER_PLUGIN_IDS."""
+        installed = [other for other in OTHER_PLUGIN_IDS if (self.plugins_dir / other).exists()]
         try:
             shell = json.loads(self.shell_config.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             shell = {}
+        ids: set[str] = set()
         if isinstance(shell, dict):
             layout = shell.get("bar", {}).get("layout", {}) if isinstance(shell.get("bar"), dict) else {}
             entries = list(shell.get("plugins") or []) if isinstance(shell.get("plugins"), list) else []
@@ -2807,9 +2865,12 @@ class Backend:
                 for section in ("left", "center", "right"):
                     if isinstance(layout.get(section), list):
                         entries.extend(layout[section])
-            enabled = any(isinstance(item, dict) and item.get("id") == ORIGINAL_PLUGIN_ID
-                          for item in entries)
-        return {"installed": installed, "enabled": enabled}
+            ids = {str(item.get("id")) for item in entries if isinstance(item, dict)}
+        return installed, [other for other in OTHER_PLUGIN_IDS if other in ids]
+
+    def _original_plugin(self) -> dict[str, bool]:
+        installed, enabled = self._other_plugins()
+        return {"installed": bool(installed), "enabled": bool(enabled)}
 
     def _externally_managed(self) -> bool:
         """A materialized managed package owns installation, never the app."""
@@ -2976,7 +3037,8 @@ class Backend:
             self._update_preferences(consent)
             self._apply_units(changed=changed, start_inactive=not before["consented"])
             if original["enabled"] and replace_original:
-                self._run_omarchy(["plugin", "disable", ORIGINAL_PLUGIN_ID])
+                for other in self._other_plugins()[1]:
+                    self._run_omarchy(["plugin", "disable", other])
         return {"ok": True, "kind": "setup", "changed": changed, "setup": self._setup_state()}
 
     def teardown(self, confirm: Any) -> dict[str, Any]:
@@ -3216,8 +3278,13 @@ class Backend:
         stderr_limit: int = MAX_PROCESS_ERROR,
         account: Any = ACTIVE_ACCOUNT,
         private_args: bool = True,
+        lifecycle: Account | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        lifecycle_account = (
+        """Run one write, yielding the sync that holds the store lock if needed.
+
+        ``lifecycle`` names that sync when it is not the account's own.
+        """
+        lifecycle_account = lifecycle if lifecycle is not None else (
             self.active if account is ACTIVE_ACCOUNT or account is None else account
         )
         if not isinstance(lifecycle_account, Account):
@@ -3471,6 +3538,10 @@ class Backend:
                     [MAX_LID_ALIASES]).fetchall()]
         except (sqlite3.Error, OmaWhatsAppError):
             return {}
+        return self._resolve_lids(lids)
+
+    def _resolve_lids(self, lids: list[str]) -> dict[str, str]:
+        """@lid JID -> phone JID through wacli, each asked once and cached."""
         if not lids:
             return {}
         key = hashlib.sha256(self.active.key.encode("utf-8")).hexdigest()[:24]
@@ -3619,13 +3690,21 @@ class Backend:
 
     def _resolve_mentions(self, items: list[dict[str, Any]], fields: tuple[str, ...]) -> None:
         """Replace each group-mention placeholder with the person's name."""
-        tokens: set[str] = set()
+        # Sender-controlled text: stop at the cap; repeats count once.
+        seen: dict[str, None] = {}
         for item in items:
             for field in fields:
-                tokens.update(MENTION_TOKEN.findall(str(item.get(field) or "")))
-        if not tokens:
+                for match in MENTION_TOKEN.finditer(str(item.get(field) or "")):
+                    seen.setdefault(match.group(1))
+                    if len(seen) >= MAX_MENTIONS_PER_PAGE:
+                        break
+                if len(seen) >= MAX_MENTIONS_PER_PAGE:
+                    break
+            if len(seen) >= MAX_MENTIONS_PER_PAGE:
+                break
+        if not seen:
             return
-        names = self._mention_names(tokens)
+        names = self._mention_names(set(seen))
         if not names:
             return
         for item in items:
@@ -4815,10 +4894,11 @@ class Backend:
             if result.returncode != 0:
                 raise OmaWhatsAppError(clean_error(result.stderr or result.stdout,
                     "WhatsApp did not accept the logout; the account stays linked."))
-            removed = False
-            if account.selector not in {"implicit", "store"}:
-                removal = self._run(["--json", "accounts", "remove", account.name], timeout=30, account=None)
-                removed = removal.returncode == 0
+        removed = False
+        if account.selector not in {"implicit", "store"}:
+            # The account list sits under another account's lock.
+            removal = self._change_account_list(["--json", "accounts", "remove", account.name])
+            removed = removal.returncode == 0
         self._refresh_account_registry()
         return {"ok": True, "kind": "unlink", "account": account.name,
                 "removed": removed, "archive_kept": True}
@@ -7808,9 +7888,15 @@ class Backend:
                     # The scope is already in command. Version contains no private values.
                     account=None, private_args=not public_version,
                 )
+            elif path in ACCOUNT_LIST_WRITES:
+                result = self._change_account_list(
+                    command,
+                    timeout=timeout + 5,
+                    stdout_limit=output_limit,
+                    stderr_limit=output_limit if include_events else MAX_PROCESS_ERROR,
+                )
             else:
                 local_destructive = path in {
-                    ("accounts", "remove"),
                     ("messages", "purge"),
                     ("store", "cleanup"),
                 }
@@ -7977,6 +8063,20 @@ class Backend:
         account: str = "",
         store: str = "",
     ) -> int:
+        args = list(values)
+        if args and args[0] == "--":
+            args = args[1:]
+        if args[:2] == ["accounts", "add"] \
+                and not self._transport_boolean_flag(args, "--no-auth"):
+            if account or store:
+                raise OmaWhatsAppError(
+                    "accounts add names its own account. Drop --account and --store."
+                )
+            tail = self._transport_args(args)[2:]
+            if not tail or tail[0].startswith("-"):
+                raise OmaWhatsAppError("Choose one exact valid account name.")
+            # Its auth flags are auth's; the config write yields the root sync.
+            return self.link_account(tail[0], authorization, auth_args=tail[1:])
         result, scoped, path = self._transport_interactive(
             values, authorization=authorization, account=account, store=store
         )

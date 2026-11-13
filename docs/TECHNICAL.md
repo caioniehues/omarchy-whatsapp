@@ -193,7 +193,7 @@ restarts, while the helper is already new: the app compares the helper's
 
 | Path | Purpose |
 |---|---|
-| `~/.config/omarchy/plugins/io.github.moizibnyousaf.omawhatsapp` | the plugin: a git checkout of this repository |
+| `~/.config/omarchy/plugins/io.github.caioniehues.omawhatsapp` | the plugin: a git checkout of this repository |
 | `…/bin/omawhatsapp`, `…/bin/omawhatsapp_core.py` | bounded helper (launcher and code), run from the checkout |
 | `~/.local/bin/omawhatsapp` | link to the checkout's helper (units and command line) |
 | `~/.local/bin/omawhatsapp-mcp` | link to the MCP server, when agents are allowed |

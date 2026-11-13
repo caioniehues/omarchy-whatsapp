@@ -489,7 +489,7 @@ Item {
     return String(stderrText || fallback).trim()
   }
   readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "io.github.moizibnyousaf.omawhatsapp"
+    ? String(manifest.id) : "io.github.caioniehues.omawhatsapp"
   property string pendingAppPayload: ""
   property bool inputsReady: false
   property string inputError: ""

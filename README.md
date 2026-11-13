@@ -78,7 +78,7 @@ conversation is included in this repository.
 ```bash
 omarchy pkg add gcc pkgconf ffmpeg
 omarchy pkg aur add wacli-bin
-omarchy plugin add https://github.com/MoizIbnYousaf/Omarchy-Whatsapp --enable
+omarchy plugin add https://github.com/caioniehues/omarchy-whatsapp --enable
 ```
 
 The native clipboard-safe editors and isolated media worker build locally against your installed Qt on first launch (and rebuild after a Qt update). No code is downloaded during that build. Media previews use bounded child processes; FFmpeg regenerates audio/video previews without original metadata. Oversized or unsupported previews show an error, and original attachments remain available to save. See [media limits](docs/MEDIA-SECURITY.md). If the compiler or matching Qt headers are unavailable, the app keeps its editors unloaded and reports the problem.
@@ -120,12 +120,12 @@ the same linked device and history, so nothing is linked again.
 first; the shell then restarts to load them. From a terminal:
 
 ```bash
-omarchy plugin update io.github.moizibnyousaf.omawhatsapp && omarchy restart shell
+omarchy plugin update io.github.caioniehues.omawhatsapp && omarchy restart shell
 ```
 
 **Remove.** Settings → Sync & storage → **Remove from this computer** stops
 background sync and removes what the setup added; then **Remove the app too**
-runs `omarchy plugin remove io.github.moizibnyousaf.omawhatsapp`. Your linked device
+runs `omarchy plugin remove io.github.caioniehues.omawhatsapp`. Your linked device
 and wacli's message store stay, so adding the app again picks up where you
 left off. The app only ever replaces or removes files exactly as it wrote
 them: anything you edited stays, and the app tells you which.
@@ -194,6 +194,15 @@ through. Details in the
 The release gate runs helper, setup, agent and offscreen QML tests, a simulated `omarchy plugin add` into an empty home,
 manifest validation, QML lint and shell checks. CI runs it against wacli
 0.17.1, 0.18.3 and 0.19.0.
+
+## Credits
+
+This is a merged fork. It follows
+[OmaWhatsApp](https://github.com/MoizIbnYousaf/Omarchy-Whatsapp) by
+MoizIbnYousaf and carries the fixes from
+[WhatsApp for Omarchy](https://github.com/atoslins/Omarchy-WhatsApp-v2) by
+Atos Lins, which upstream does not have yet. Setup turns off either of those
+plugins if it is enabled, since all three share the helper, units and state.
 
 OmaWhatsApp is independent and not affiliated with WhatsApp or Meta.
 

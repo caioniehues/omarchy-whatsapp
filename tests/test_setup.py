@@ -38,7 +38,7 @@ class SetupTests(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
         # A checkout as omarchy plugin add leaves it.
-        self.checkout = self.root / "plugins" / "io.github.moizibnyousaf.omawhatsapp"
+        self.checkout = self.root / "plugins" / "io.github.caioniehues.omawhatsapp"
         (self.checkout / "bin").mkdir(parents=True)
         for name in ("omawhatsapp", "omawhatsapp-mcp"):
             (self.checkout / "bin" / name).write_text("#!/bin/sh\n", encoding="utf-8")
@@ -87,7 +87,7 @@ class SetupTests(unittest.TestCase):
 
     def test_managed_launcher_uses_the_same_package_and_preserves_arguments(self) -> None:
         config = self.root / "config with spaces"
-        helper = config / "omarchy/plugins/io.github.moizibnyousaf.omawhatsapp/bin/omawhatsapp"
+        helper = config / "omarchy/plugins/io.github.caioniehues.omawhatsapp/bin/omawhatsapp"
         helper.parent.mkdir(parents=True)
         helper.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n', encoding="utf-8")
         helper.chmod(0o755)
@@ -356,10 +356,11 @@ class SetupTests(unittest.TestCase):
                          "[Service]\nExecStart=/bin/true\n")
         self.assertFalse(self.home_bin.exists(), "it stops before changing anything")
 
-    def test_the_fork_is_replaced_only_when_allowed(self) -> None:
-        (self.root / "plugins" / backend_module.ORIGINAL_PLUGIN_ID).mkdir(parents=True)
-        self.shell.write_text(json.dumps({"plugins": [], "bar": {"layout": {"right": [
-            {"id": backend_module.ORIGINAL_PLUGIN_ID}]}}}), encoding="utf-8")
+    def test_the_other_copies_are_replaced_only_when_allowed(self) -> None:
+        moiz, atos = backend_module.OTHER_PLUGIN_IDS
+        (self.root / "plugins" / atos).mkdir(parents=True)
+        self.shell.write_text(json.dumps({"plugins": [{"id": moiz}], "bar": {"layout": {"right": [
+            {"id": atos}]}}}), encoding="utf-8")
         self.assertEqual(self.backend._setup_state()["original_plugin"],
                          {"installed": True, "enabled": True})
         with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "The fork is still turned on"):
@@ -367,7 +368,9 @@ class SetupTests(unittest.TestCase):
         self.assertFalse(self.home_bin.exists())
         with mock.patch.object(self.backend, "_run_omarchy") as omarchy:
             self.backend.setup(True, True)
-        omarchy.assert_called_once_with(["plugin", "disable", backend_module.ORIGINAL_PLUGIN_ID])
+        self.assertEqual(omarchy.call_args_list, [
+            mock.call(["plugin", "disable", moiz]), mock.call(["plugin", "disable", atos])],
+            "every enabled copy is turned off")
 
     def test_teardown_undoes_the_setup_and_keeps_the_archive(self) -> None:
         self.backend.setup(True, False)
@@ -385,7 +388,7 @@ class SetupTests(unittest.TestCase):
         self.assertEqual(result["kept"], [])
         self.assertTrue((self.root / "store" / "wacli.db").is_file(), "the archive stays")
         self.assertFalse(self.backend._preferences()["setup"]["consented"])
-        self.assertEqual(result["remove_command"], "omarchy plugin remove io.github.moizibnyousaf.omawhatsapp")
+        self.assertEqual(result["remove_command"], "omarchy plugin remove io.github.caioniehues.omawhatsapp")
 
     # Store review, 2026-09-27: the setup must never replace a path that
     # belongs to something else, and neither may teardown or turning agents off.

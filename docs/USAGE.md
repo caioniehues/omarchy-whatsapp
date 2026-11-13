@@ -206,9 +206,9 @@ them keeps the chat list warm in the resident service.
 Keybindings and hot corners can drive the app through the Omarchy shell:
 
 ```bash
-omarchy-shell io.github.moizibnyousaf.omawhatsapp toggleApp '{}'
-omarchy-shell io.github.moizibnyousaf.omawhatsapp toggleDropdown '{}'
-omarchy-shell io.github.moizibnyousaf.omawhatsapp openDropdown '{}'
+omarchy-shell io.github.caioniehues.omawhatsapp toggleApp '{}'
+omarchy-shell io.github.caioniehues.omawhatsapp toggleDropdown '{}'
+omarchy-shell io.github.caioniehues.omawhatsapp openDropdown '{}'
 ```
 
 `toggleDropdown` and `openDropdown` need the bar widget, as clicking its icon

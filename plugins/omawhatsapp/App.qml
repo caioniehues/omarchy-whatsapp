@@ -201,7 +201,7 @@ Item {
   ]
 
   readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "io.github.moizibnyousaf.omawhatsapp"
+    ? String(manifest.id) : "io.github.caioniehues.omawhatsapp"
   // The helper ships in this checkout, at bin/ two levels above this file.
   readonly property string helper: decodeURIComponent(
     String(Qt.resolvedUrl("../../bin/omawhatsapp")).replace(/^file:\/\//, ""))

@@ -72,7 +72,7 @@ QT_QPA_PLATFORM=offscreen "$plugin_home/paste-reader"
 # What `omarchy plugin add` installs: the repository's files in the plugins
 # folder, nothing else. It must validate, and its helper must find itself
 # there, with an empty home and no wacli.
-checkout="$plugin_home/.config/omarchy/plugins/io.github.moizibnyousaf.omawhatsapp"
+checkout="$plugin_home/.config/omarchy/plugins/io.github.caioniehues.omawhatsapp"
 mkdir -p -- "$checkout"
 git ls-files -z --cached --others --exclude-standard \
   | while IFS= read -r -d '' file; do
@@ -120,7 +120,7 @@ for path in sys.argv[1:]:
 ' bin/omawhatsapp_assets.py scripts/check-wacli-parity scripts/earlier-copies tests/write_media_fixtures.py
 git diff --check
 
-jq -e '.id == "io.github.moizibnyousaf.omawhatsapp"' manifest.json >/dev/null || {
+jq -e '.id == "io.github.caioniehues.omawhatsapp"' manifest.json >/dev/null || {
   echo "test: public plugin ID must remain globally namespaced" >&2
   exit 1
 }
@@ -152,6 +152,13 @@ for branded_surface in BarWidget.qml Dropdown.qml App.qml; do
     exit 1
   }
 done
+
+# Qt 6.12 registers its own Color type, so a bare Color.<role> reads undefined
+# and the app paints black on black. The palette is always Commons.Color.
+if rg -n '(^|[^.\w])Color\.[a-z]' --glob '*.qml' --glob '*.js' plugins/omawhatsapp; then
+  echo "test: read the Omarchy palette as Commons.Color, never a bare Color" >&2
+  exit 1
+fi
 
 rg -q '"setpriv", "--pdeathsig", "TERM"' plugins/omawhatsapp/Service.qml || {
   echo "test: store watcher must die with the Omarchy shell" >&2

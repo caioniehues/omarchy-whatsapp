@@ -45,4 +45,4 @@ dev:
 
 # Open the full app with repository-owned demo data (safe for screenshots).
 demo:
-	omarchy-shell io.github.moizibnyousaf.omawhatsapp openApp '{"demo":true}'
+	omarchy-shell io.github.caioniehues.omawhatsapp openApp '{"demo":true}'

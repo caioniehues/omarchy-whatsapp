@@ -7,7 +7,7 @@ import qs.Ui
 BarWidget {
   id: root
 
-  readonly property string pluginId: "io.github.moizibnyousaf.omawhatsapp"
+  readonly property string pluginId: "io.github.caioniehues.omawhatsapp"
 
   readonly property var oma: bar && bar.shell
     ? bar.shell.serviceFor(root.pluginId) : null

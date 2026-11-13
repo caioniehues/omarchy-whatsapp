@@ -10,7 +10,7 @@ runtimes.
 Install the app the way users do, then try changes on top of it:
 
 ```bash
-omarchy plugin add https://github.com/MoizIbnYousaf/Omarchy-Whatsapp --enable
+omarchy plugin add https://github.com/caioniehues/omarchy-whatsapp --enable
 make dev                    # copy the working tree over the plugin checkout
 ./scripts/dev-sync --reset  # back to its commit before omarchy plugin update
 ```

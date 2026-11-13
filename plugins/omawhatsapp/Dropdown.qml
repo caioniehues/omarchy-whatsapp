@@ -18,7 +18,7 @@ import "ShortcutModel.js" as Shortcuts
 // source of truth; this surface only owns transient navigation and draft state.
 Panel {
   id: root
-  moduleName: "io.github.moizibnyousaf.omawhatsapp"
+  moduleName: "io.github.caioniehues.omawhatsapp"
   manageIpc: false
 
   property var anchorItem: null
@@ -624,6 +624,9 @@ Panel {
     filePickerProcess.originRef = AccountModel.chatRef(origin.account, origin.jid)
     filePickerProcess.command = ["/usr/bin/zenity", "--file-selection",
       "--multiple", "--separator=\n", "--title=Add WhatsApp attachments"]
+    // Release the layer-shell dismissal surfaces while the native dialog owns
+    // the pointer. Keep the conversation and draft until its result returns.
+    root.close()
     filePickerProcess.running = true
   }
 
@@ -961,6 +964,7 @@ Panel {
 
   Process {
     id: filePickerProcess
+    objectName: "dropdownFilePickerProcess"
     property var originRef: AccountModel.chatRef("", "")
     command: []
     stdout: StdioCollector { id: filePickerOutput }
@@ -968,8 +972,14 @@ Panel {
     onExited: function(exitCode) {
       var target = originRef
       originRef = AccountModel.chatRef("", "")
-      if (exitCode !== 0 || !root.opened || root.viewMode !== "conversation"
+      if (root.viewMode !== "conversation"
           || !AccountModel.sameRef(target, root.currentChatRef())) return
+      if (exitCode !== 0) {
+        if (!root.demoMode && root.service) root.service.dropdownOpen = true
+        root.controller.show()
+        Qt.callLater(root.focusComposer)
+        return
+      }
       var incoming = String(filePickerOutput.text || "").split(/\r?\n/)
         .map(function(path) { return path.trim() })
         .filter(function(path) { return path.startsWith("/") })
@@ -984,7 +994,9 @@ Panel {
       root.errorText = String(result.state.error || "")
       if (!root.demoMode && root.service && result.rejected.length > 0)
         root.service.discardStages(result.rejected)
-      root.focusComposer()
+      if (!root.demoMode && root.service) root.service.dropdownOpen = true
+      root.controller.show()
+      Qt.callLater(root.focusComposer)
     }
   }
 
