@@ -103,3 +103,19 @@ The version lives in `manifest.json` and `HELPER_VERSION` in
 `bin/omawhatsapp_core.py`; `./scripts/test` fails if they disagree.
 Update both together with `CHANGELOG.md`, validate the final commit in CI,
 then tag and publish its GitHub release.
+
+## Following upstream
+
+This fork tracks [MoizIbnYousaf/Omarchy-Whatsapp](https://github.com/MoizIbnYousaf/Omarchy-Whatsapp).
+Every Monday, and on demand from the Actions tab, the `upstream-sync`
+workflow merges upstream `main` into the `upstream-sync` branch and opens or
+updates one pull request against `main`; it then dispatches the release gate
+on that branch, since pushes made with `GITHUB_TOKEN` start no workflow. A
+merge that conflicts fails the run, and its summary lists the paths to resolve
+by hand.
+
+With only `GITHUB_TOKEN`, the repository setting *Allow GitHub Actions to
+create and approve pull requests* (Settings → Actions → General) must be on,
+and an upstream change to a file under `.github/workflows/` cannot be pushed.
+An `UPSTREAM_SYNC_TOKEN` secret, a fine-grained token with contents, pull
+requests and workflows write access to this repository, lifts both limits.
