@@ -78,6 +78,15 @@ BarWidget {
       root.oma.openApp(JSON.stringify(payload || ({})))
   }
 
+  // A replacement (cloned) bar hands its widgets a facade whose serviceFor()
+  // answers null (omacom/omarchy#11051), and so can a bar still starting up.
+  // The icon then has no badge or dropdown, but it still opens the app
+  // through the plugin's own IPC target, which the resident service answers
+  // under any bar.
+  function openAppWithoutService() {
+    Quickshell.execDetached(["omarchy-shell", root.pluginId, "openApp", "{}"])
+  }
+
   implicitWidth: button.implicitWidth
   implicitHeight: button.implicitHeight
 
@@ -112,14 +121,16 @@ BarWidget {
     // Closed: grey until it opens again.
     dimmed: root.muted || (!!root.oma && root.oma.closed === true)
     horizontalMargin: 8
-    tooltipText: root.oma ? root.oma.barTooltipWithMute : "OmaWhatsApp · reconnecting"
+    tooltipText: root.oma ? root.oma.barTooltipWithMute
+      : "OmaWhatsApp · this bar cannot reach the app's service (a replacement bar?), so no badge or quick reply · click to open the app"
 
     onPressed: function(code) {
       if (code === Qt.MiddleButton) root.dismissNotifications()
       else if (code === Qt.RightButton) root.toggleMute()
+      else if (!root.oma) root.openAppWithoutService()
       else {
         // A closed OmaWhatsApp opens again from its icon.
-        if (root.oma && root.oma.closed === true) root.oma.launchApp()
+        if (root.oma.closed === true) root.oma.launchApp()
         root.toggleDropdown()
       }
     }
