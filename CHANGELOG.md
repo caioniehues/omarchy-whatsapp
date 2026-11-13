@@ -1,5 +1,80 @@
 # Changelog
 
+## 0.21.0 — wacli 0.26, status, starred and profile
+
+### Breaking
+
+- wacli 0.24.0 or newer is now required (tested with 0.24.0, 0.25.1 and 0.26.0).
+  0.23 is skipped because it can repeat archive-state recovery on every sync
+  start (wacli #501).
+
+### Features
+
+- Sent messages show delivered and read ticks from the receipts official wacli
+  0.21+ keeps, without the OmaWhatsApp build. In groups a message turns blue only
+  once every other member has read it.
+- Send files up to 2048 MB with wacli 0.25 or newer; each large file names its
+  own cap and gets a longer upload deadline. wacli 0.24 keeps 100 MB and says why.
+- Replies that quote a file, a voice note or a sticker carry the quoted content.
+- First-run linking can ask the phone for older history ("Bring older history",
+  off by default, with day and size limits).
+- Settings → Media → Re-download missing voice notes, bounded, with sync paused
+  and restarted around it.
+- Status updates (`Ctrl+Shift+U`): who posted in the last 24 hours, from every
+  account, read from the local mirror without sending a read receipt. Status
+  photos and videos open only when on this computer; wacli does not download
+  status media.
+- Starred messages (`Ctrl+Shift+S`): every chat's or the open chat's, newest
+  star first; Enter opens the chat on that message, `U` unstars it.
+- Settings → Profile: your name, About text and photo per account. Every change
+  names the exact new value, waits for a second click, refuses while offline and
+  never retries; values reach wacli only over private stdin. Photos must be a
+  JPEG or PNG up to 10 MB.
+- Load older messages from your phone at the top of a chat whose local copy has
+  ended: one bounded `history backfill` of up to 50 messages per click, never
+  repeated by itself, off while the account's sync is paused.
+- Under a replacement (cloned) Omarchy bar the icon keeps working: its tooltip
+  explains the missing badge and quick reply, and a click opens the full app
+  (upstream #30).
+- `omawhatsapp launcher-chats` / `launcher-open` let any picker (e.g. `fzf`)
+  open a chat without a chat ID in a process list. Omarchy 4.5's launcher has no
+  runtime source for chats yet; Usage explains.
+- The agent gateway covers all 111 wacli 0.26.0 commands (`contacts save`,
+  `contacts resolve`, `messages changes`, `mark-read --through-message-id`).
+- A weekly `upstream-sync` workflow merges MoizIbnYousaf/Omarchy-Whatsapp into
+  an `upstream-sync` pull request and runs the release gate on it.
+
+### Privacy
+
+- Presence and typing never reach wacli while Show me online is off; only
+  "stop typing" and "go offline" still go out.
+- With official wacli the chat header says online status needs the OmaWhatsApp
+  build. The app never shows you online all day to get an answer.
+- The private wacli build is now based on wacli 0.26.0 (`omawhatsapp.4`). Private
+  stdin input covers every command and flag added since 0.19. Older private
+  builds keep working.
+
+### Fixed
+
+- A group whose details are temporarily unavailable keeps its stored name; since
+  wacli 0.20 sync could name it after the latest sender (private build).
+- Opening a photo from the media browser in the media viewer.
+- Read marks bounded by an exact message no longer wait behind sends (private
+  build).
+
+### Changed
+
+- The send-queue backport is gone (upstream since wacli 0.20.0). Two patches
+  remain, private input and outcomes; `dependencies/README.md` explains why.
+
+### Upgrading
+
+- Rebuild the private wacli from pinned v0.26.0 (`535a8b9`) with Go 1.27.3+
+  following [the build steps](dependencies/README.md#build-and-install); check
+  that `wacli --private-args-version` reports `"build":"omawhatsapp.4"`.
+- Restart sync: `systemctl --user restart wacli-sync.service` and each running
+  `wacli-sync@<account>.service`, then restart the app. No relinking.
+
 ## 0.20.0 — Merged fork
 
 - Merge [atoslins/Omarchy-WhatsApp-v2](https://github.com/atoslins/Omarchy-WhatsApp-v2)

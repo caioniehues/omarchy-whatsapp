@@ -970,7 +970,7 @@ SUPPORTED_CHAT_WHERE = f"""({chat_kind_sql()} = 'dm' OR (
 # (or newer) is accepted; leaves unknown to the registry keep failing closed.
 # Bumped with manifest.json (scripts/test checks it). The app compares it with
 # the plugin it loaded: an update that replaced only the plugin says so.
-HELPER_VERSION = "0.20.0"
+HELPER_VERSION = "0.21.0"
 # 0.23 is skipped: it can repeat archive-state recovery on every sync start
 # and discard saved app state on a failed replay (wacli #501).
 WACLI_MINIMUM_VERSION = "0.24.0"
