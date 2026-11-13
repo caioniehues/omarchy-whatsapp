@@ -23,6 +23,22 @@ TestCase {
     ])
   }
 
+  function test_full_history_is_opt_in_and_bounded() {
+    var operations = createTemporaryObject(operationsComponent, testCase)
+    var base = ["/usr/bin/xdg-terminal-exec", "--title=OmaWhatsApp · Link WhatsApp", "--hold", "--",
+      "/synthetic/omawhatsapp", "wacli", "--interactive", "--authorize", "interactive", "--", "auth"]
+    compare(operations.mainLinkCommand(null), base, "an ordinary link asks for nothing more")
+    compare(operations.mainLinkCommand({ full: false, days: 30 }), base)
+    compare(operations.mainLinkCommand({ full: true, days: 365, size_mb: 2048 }),
+      base.concat(["--full-history", "--history-days", "365", "--history-size-mb", "2048"]))
+    compare(operations.mainLinkCommand({ full: true, days: 0, size_mb: 0 }),
+      base.concat(["--full-history"]), "0 leaves that limit to the phone")
+    // Out of range never becomes a link that asks for everything.
+    verify(!operations.linkMainAccount("primary", { full: true, days: -1, size_mb: 0 }))
+    verify(!operations.linkAccount("work", { full: true, days: 30, size_mb: 1e9 }))
+    verify(!operations.linkBusy)
+  }
+
   function test_authenticated_discovery_wins_over_a_late_terminal_exit() {
     var operations = createTemporaryObject(operationsComponent, testCase)
     operations.linkPhase = "running"

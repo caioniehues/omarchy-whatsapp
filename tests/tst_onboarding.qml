@@ -19,7 +19,8 @@ TestCase {
       property bool avatarBusy: false
       property string statusMessage: ""
       property string linked: ""
-      function linkMainAccount(name) { linked = name; linkBusy = true
+      property var history: undefined
+      function linkMainAccount(name, request) { linked = name; history = request; linkBusy = true
         statusMessage = "Scan the QR code in the terminal with your phone"; return true }
     }
   }
@@ -60,6 +61,33 @@ TestCase {
     compare(service.accountOperations.linked, "primary", "the main account, by its own name")
     verify(view.linking)
     verify(findChild(view, "onboardingStatus").text.indexOf("QR code") > 0)
+  }
+
+  function test_older_history_is_off_until_asked_then_carries_its_limits() {
+    var service = createTemporaryObject(serviceStub, testCase)
+    service.accountOperations = createTemporaryObject(operationsStub, testCase)
+    var view = createTemporaryObject(viewComponent, testCase, { service: service })
+    var toggle = findChild(view, "onboardingFullHistory")
+    verify(!toggle.checked, "pairing brings the phone's recent window by default")
+    verify(findChild(view, "historyDays-90") === null, "no limits to pick while off")
+    toggle.toggled()
+    verify(view.fullHistory)
+    waitForRendering(view)
+    var days = findChild(view, "historyDays-90")
+    verify(days !== null)
+    mouseClick(days, days.width / 2, days.height / 2)
+    var size = findChild(view, "historySize-0")
+    mouseClick(size, size.width / 2, size.height / 2)
+    verify(view.startLink())
+    compare(service.accountOperations.history, { full: true, days: 90, size_mb: 0 })
+  }
+
+  function test_an_ordinary_link_asks_for_no_history() {
+    var service = createTemporaryObject(serviceStub, testCase)
+    service.accountOperations = createTemporaryObject(operationsStub, testCase)
+    var view = createTemporaryObject(viewComponent, testCase, { service: service })
+    verify(view.startLink())
+    compare(service.accountOperations.history, null)
   }
 
   function test_an_ordinary_wacli_points_to_the_private_build_before_linking() {

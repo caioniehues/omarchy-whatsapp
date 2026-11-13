@@ -727,6 +727,41 @@ MAX_LIFECYCLE_RECOVERY = 4096
 ACTIVE_ACCOUNT: Any = object()
 ACCOUNT_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 LEGACY_ACCOUNT_NAME = "primary"
+# Opt-in full-history pairing (wacli 0.21): how far back and how much the
+# phone may send while linking. Off unless the link asks for it.
+HISTORY_PAIRING_MAX_DAYS = 3650
+HISTORY_PAIRING_MAX_SIZE_MB = 16384
+
+
+def history_pairing_args(value: Any) -> list[str]:
+    """wacli auth flags for a full-history link, or none for the phone's default.
+
+    ``value`` is None/False for an ordinary link, or ``{"full": true, "days":
+    N, "size_mb": M}`` where 0 leaves that limit to the phone.
+    """
+    if value is None or value is False:
+        return []
+    if not isinstance(value, dict) or value.get("full") is not True \
+            or set(value) - {"full", "days", "size_mb"}:
+        raise OmaWhatsAppError("Choose full history with its day and size limits, or neither.")
+    limits = []
+    for key, label, maximum in (("days", "day", HISTORY_PAIRING_MAX_DAYS),
+                                ("size_mb", "size", HISTORY_PAIRING_MAX_SIZE_MB)):
+        number = value.get(key, 0)
+        if isinstance(number, bool) or not isinstance(number, int) \
+                or not 0 <= number <= maximum:
+            raise OmaWhatsAppError(
+                f"The history {label} limit must be between 0 and {maximum}.")
+        limits.append(number)
+    days, size_mb = limits
+    args = ["--full-history"]
+    if days:
+        args.extend(["--history-days", str(days)])
+    if size_mb:
+        args.extend(["--history-size-mb", str(size_mb)])
+    return args
+
+
 # Chats checked per explicit refresh. Each refresh yields the sync unit
 # while it runs, so a larger batch means fewer restarts for the same work.
 AVATAR_REFRESH_LIMIT = 64
@@ -8320,7 +8355,9 @@ def main() -> int:
     if args.command == "link-token":
         try:
             data = backend.consume_handoff(args.token, "link")
-            return backend.link_account(data["name"], "interactive")
+            # Checked again here: the handoff is only a file in our state.
+            return backend.link_account(data["name"], "interactive",
+                                        auth_args=history_pairing_args(data.get("history")))
         except OmaWhatsAppError as exc:
             print(clean_error(exc, "Linking could not be started."), file=sys.stderr)
             return 1
@@ -8375,7 +8412,10 @@ def main() -> int:
             name = str(payload.get("name") or "").strip()
             if payload.get("authorization") != "interactive" or not ACCOUNT_NAME.fullmatch(name):
                 raise OmaWhatsAppError("Choose an account name and authorize interactive linking.")
-            return emit({"ok": True, "token": backend.prepare_handoff("link", {"name": name})})
+            history = payload.get("history")
+            history_pairing_args(history)
+            return emit({"ok": True, "token": backend.prepare_handoff(
+                "link", {"name": name, "history": history or None})})
         if args.command == "consume-handoff":
             data = backend.consume_handoff(payload.get("token"), "notification")
             return emit({"ok": True, "target": data})

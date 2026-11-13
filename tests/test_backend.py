@@ -3067,6 +3067,18 @@ class BackendTests(unittest.TestCase):
                          "--through-message-id", "a1"],
                 "authorization": "whatsapp-write"})
 
+    def test_full_history_pairing_is_opt_in_and_bounded(self) -> None:
+        pairing = backend_module.history_pairing_args
+        self.assertEqual(pairing(None), [], "an ordinary link asks for the phone's window")
+        self.assertEqual(pairing({"full": True, "days": 365, "size_mb": 2048}),
+                         ["--full-history", "--history-days", "365", "--history-size-mb", "2048"])
+        self.assertEqual(pairing({"full": True, "days": 0, "size_mb": 0}), ["--full-history"])
+        for bad in ({"full": False, "days": 30}, {"full": True, "days": -1},
+                    {"full": True, "days": True}, {"full": True, "size_mb": 10 ** 9},
+                    {"full": True, "days": "30"}, {"full": True, "phone": "+1555"}, "full"):
+            with self.subTest(bad=bad), self.assertRaises(backend_module.OmaWhatsAppError):
+                pairing(bad)
+
     def test_wacli_local_read_is_json_and_read_only(self) -> None:
         completed = subprocess.CompletedProcess(
             [], 0, '{"success":true,"data":{"version":"test"}}', ""
