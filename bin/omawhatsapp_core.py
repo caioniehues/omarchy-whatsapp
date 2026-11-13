@@ -624,7 +624,16 @@ NEW_CHAT_CHECK_TTL = 15 * 60
 NEW_CHAT_CHECKS_FILE = "new-chat-checks.json"
 MAX_NEW_CHAT_CHECKS = 32
 MAX_NEW_CHAT_STATE = 16 * 1024
+# Pasted content, voice drafts and files for a wacli older than 0.25 stay at
+# wacli's default 100 MiB. From 0.25 a send names its own cap with
+# --max-size-mb, up to WhatsApp's 2048 MiB document limit; wacli reads the
+# whole file into memory, so the cap is the file's own size, never the maximum.
 MAX_FILE = 100 * 1024 * 1024
+MAX_SEND_FILE = 2048 * 1024 * 1024
+# Upload deadline: a floor for small files plus one second per 256 KiB (a
+# 2 Mbit/s uplink), so a 2048 MiB document gets about 2.3 hours, never more.
+SEND_FILE_BASE_SECONDS = 120
+SEND_FILE_BYTES_PER_SECOND = 256 * 1024
 MAX_ATTACHMENTS = 10
 MAX_SENT_MEDIA_HINTS = 2000
 MAX_SENT_REPLY_HINTS = 2000
@@ -886,21 +895,25 @@ SUPPORTED_CHAT_WHERE = f"""({chat_kind_sql()} = 'dm' OR (
 # Bumped with manifest.json (scripts/test checks it). The app compares it with
 # the plugin it loaded: an update that replaced only the plugin says so.
 HELPER_VERSION = "0.20.0"
-WACLI_MINIMUM_VERSION = "0.17.1"
-WACLI_PARITY_VERSION = "0.19.0"
+# 0.23 is skipped: it can repeat archive-state recovery on every sync start
+# and discard saved app state on a failed replay (wacli #501).
+WACLI_MINIMUM_VERSION = "0.24.0"
+WACLI_PARITY_VERSION = "0.26.0"
 # Leaves that only exist from a given wacli release. The parity check accepts
 # their absence on an older accepted release; there the gateway still
-# demands the exact target flags, so wacli itself rejects the call.
-WACLI_LEAF_MINIMUM_VERSIONS: dict[tuple[str, ...], str] = {
-    ("groups", "participants", "list"): "0.18.0",
-}
-# Leaves only wacli builds that follow presence have (fork branch
+# demands the exact target flags, so wacli itself rejects the call. Every
+# leaf of 0.26.0 already exists in the minimum 0.24.0.
+WACLI_LEAF_MINIMUM_VERSIONS: dict[tuple[str, ...], str] = {}
+# Flags the app passes only to a wacli that has them: `send file
+# --max-size-mb` arrived in 0.25.0; older accepted releases cap at 100 MiB.
+WACLI_SEND_MAX_SIZE_VERSION = "0.25.0"
+# Leaves only the OmaWhatsApp wacli build has (fork branch
 # oma-presence-receipts). Official releases lack them; either is accepted.
 WACLI_OPTIONAL_LEAVES = frozenset({
-    # Fork-only as well: starring through app state.
+    # Starring through app state.
     ("messages", "star"),
+    # Showing this account online on a lease while the app has focus.
     ("presence", "available"),
-    ("presence", "subscribe"),
     ("presence", "unavailable"),
 })
 WACLI_GLOBAL_FLAGS = frozenset({
@@ -924,7 +937,7 @@ WACLI_CHAT_TO_OPERATIONS = frozenset({
     ("send", "voice"),
 })
 
-# Existing-target selectors accepted by wacli 0.19.0. The gateway resolves
+# Existing-target selectors accepted by wacli 0.26.0. The gateway resolves
 # these against the selected account's local mirror so names, phone numbers,
 # and --pick can never choose a recipient or destructive target implicitly.
 WACLI_REQUIRED_CHAT_FLAGS: dict[tuple[str, ...], tuple[str, ...]] = {
@@ -986,6 +999,7 @@ WACLI_CHANNEL_JID_OPERATIONS = frozenset({
 WACLI_CONTACT_JID_OPERATIONS = frozenset({
     ("contacts", "alias", "rm"),
     ("contacts", "alias", "set"),
+    ("contacts", "save"),
     ("contacts", "show"),
     ("contacts", "tags", "add"),
     ("contacts", "tags", "rm"),
@@ -1010,9 +1024,13 @@ WACLI_MESSAGE_TARGETS: dict[tuple[str, ...], tuple[str, str]] = {
     ("send", "select"): ("--to", "--id"),
 }
 
-# Every user-facing leaf in wacli 0.19.0 is classified here (the same 104
-# leaves as 0.18.3; 0.19.0 adds only `chats mark-read --receipts`, which stays
-# a WhatsApp write). Unknown leaves
+# Every user-facing leaf in wacli 0.26.0 is classified here: the 104 leaves of
+# 0.19.0 plus `contacts resolve` (0.20, offline phone/LID lookup), `messages
+# changes` (0.22, content-free local journal), `presence subscribe` (0.21) and
+# `contacts save` (0.24, an account-wide WhatsApp write). New flags on known
+# leaves stay in their leaf's class (`send file --max-size-mb`, `media retry
+# --type`, `auth --full-history`, `chats mark-read --through-message-id`, the
+# `--cursor` reads). Unknown leaves
 # fail closed; a future wacli release can therefore never silently broaden an
 # agent's mutation surface. A few flag-dependent operations are narrowed by
 # _transport_policy (for example, cleanup --dry-run is a local read).
@@ -1050,6 +1068,8 @@ WACLI_OPERATION_POLICIES: dict[tuple[str, ...], str] = {
     ("contacts", "check"): "remote-read",
     ("contacts", "import-system"): "local-write",
     ("contacts", "refresh"): "local-write",
+    ("contacts", "resolve"): "local-read",
+    ("contacts", "save"): "whatsapp-write",
     ("contacts", "search"): "local-read",
     ("contacts", "show"): "local-read",
     ("contacts", "tags", "add"): "local-write",
@@ -1085,6 +1105,7 @@ WACLI_OPERATION_POLICIES: dict[tuple[str, ...], str] = {
     ("media", "backfill"): "sync",
     ("media", "download"): "sync",
     ("media", "retry"): "sync",
+    ("messages", "changes"): "local-read",
     ("messages", "context"): "local-read",
     ("messages", "delete"): "destructive",
     ("messages", "edit"): "whatsapp-write",
@@ -2643,6 +2664,15 @@ class Backend:
     @staticmethod
     def _wacli_too_old(version: str) -> bool:
         return bool(version) and version_tuple(version) < version_tuple(WACLI_MINIMUM_VERSION)
+
+    def _wacli_at_least(self, needed: str) -> bool:
+        """Whether the installed wacli has a feature from release ``needed``.
+
+        An unreadable version never has it, so a flag an older build would
+        reject is simply not passed.
+        """
+        version = self._wacli_version()
+        return bool(version) and version_tuple(version) >= version_tuple(needed)
 
     @staticmethod
     def _app_version(plugin_dir: Path) -> str:
@@ -5986,29 +6016,87 @@ class Backend:
     @classmethod
     def _delivery_status(cls, connection: sqlite3.Connection,
                          keys: list[tuple[str, str]]) -> dict[tuple[str, str], str]:
-        """Delivery state of sent messages, from wacli builds that keep receipts.
+        """Delivery state of sent messages, from what the store kept of receipts.
 
-        Official wacli keeps none, so the table may be missing; a message
-        without a row has no known state and shows no tick.
+        The OmaWhatsApp wacli build keeps one state per message in
+        message_status; official wacli 0.21 and newer keep each recipient's
+        receipt in message_receipts. Either table may be missing, and a
+        message neither knows has no known state and shows no tick.
         """
-        if not keys or not cls._has_table(connection, "message_status"):
+        if not keys:
             return {}
         found: dict[tuple[str, str], str] = {}
         by_chat: dict[str, list[str]] = {}
         for chat_jid, message_id in keys:
             by_chat.setdefault(chat_jid, []).append(message_id)
+        if cls._has_table(connection, "message_status"):
+            for chat_jid, ids in by_chat.items():
+                for start in range(0, len(ids), 400):
+                    chunk = ids[start:start + 400]
+                    rows = connection.execute(
+                        f"""SELECT msg_id, status FROM message_status
+                        WHERE chat_jid = ? AND msg_id IN ({",".join("?" for _ in chunk)})""",
+                        [chat_jid, *chunk],
+                    ).fetchall()
+                    for row in rows:
+                        code = row["status"]
+                        if isinstance(code, int) and 0 <= code < len(DELIVERY_STATES):
+                            found[(chat_jid, str(row["msg_id"]))] = DELIVERY_STATES[code]
+        if cls._has_table(connection, "message_receipts"):
+            found.update(cls._receipt_delivery_status(connection, {
+                chat_jid: [message_id for message_id in ids if (chat_jid, message_id) not in found]
+                for chat_jid, ids in by_chat.items()
+            }))
+        return found
+
+    @classmethod
+    def _receipt_delivery_status(
+        cls, connection: sqlite3.Connection, by_chat: dict[str, list[str]],
+    ) -> dict[tuple[str, str], str]:
+        """Ticks from official wacli's per-recipient receipts.
+
+        A direct message shows how far its one recipient got. A group message,
+        as on the phone, is delivered or read only once every other member
+        is; some of them is still one tick, and with no known member list the
+        group never claims more than delivered to some.
+        """
+        found: dict[tuple[str, str], str] = {}
+        has_members = cls._has_table(connection, "group_participants")
         for chat_jid, ids in by_chat.items():
+            group = chat_jid.endswith("@g.us")
+            others = 0
+            if group and has_members:
+                row = connection.execute(
+                    "SELECT COUNT(*) FROM group_participants WHERE group_jid = ?", [chat_jid]
+                ).fetchone()
+                # The member list includes this account itself.
+                others = max(0, int(row[0] or 0) - 1) if row else 0
             for start in range(0, len(ids), 400):
                 chunk = ids[start:start + 400]
+                if not chunk:
+                    continue
                 rows = connection.execute(
-                    f"""SELECT msg_id, status FROM message_status
-                    WHERE chat_jid = ? AND msg_id IN ({",".join("?" for _ in chunk)})""",
+                    f"""SELECT msg_id, COUNT(*) AS delivered,
+                      SUM(CASE WHEN status IN ('read', 'played') THEN 1 ELSE 0 END) AS seen,
+                      SUM(CASE WHEN status = 'played' THEN 1 ELSE 0 END) AS played
+                    FROM message_receipts
+                    WHERE chat_jid = ? AND msg_id IN ({",".join("?" for _ in chunk)})
+                      AND status IN ('delivered', 'read', 'played')
+                    GROUP BY msg_id""",
                     [chat_jid, *chunk],
                 ).fetchall()
                 for row in rows:
-                    code = row["status"]
-                    if isinstance(code, int) and 0 <= code < len(DELIVERY_STATES):
-                        found[(chat_jid, str(row["msg_id"]))] = DELIVERY_STATES[code]
+                    delivered, seen, played = (int(row["delivered"] or 0),
+                                               int(row["seen"] or 0), int(row["played"] or 0))
+                    if delivered <= 0:
+                        continue
+                    if not group:
+                        state = "played" if played else "read" if seen else "delivered"
+                    elif others <= 0 or delivered < others:
+                        state = "sent"
+                    else:
+                        state = "read" if seen >= others else "delivered"
+                    found[(chat_jid, str(row["msg_id"]))] = state
         return found
 
     @staticmethod
@@ -6757,9 +6845,9 @@ class Backend:
         # This preference belongs to the command's account, not the UI's
         # current selection. Existing automatic-reading choices never opt in.
         if action_clean == "read" and self._account_state().get("sender_read_receipts") is True:
-            version = self._wacli_version()
-            if not version or version_tuple(version) < (0, 19, 0):
-                raise OmaWhatsAppError("Sender read receipts require wacli 0.19.0 or newer.")
+            if not self._wacli_at_least(WACLI_MINIMUM_VERSION):
+                raise OmaWhatsAppError(
+                    f"Sender read receipts require wacli {WACLI_MINIMUM_VERSION} or newer.")
             command.append("--receipts")
         self._envelope(self._write(command, timeout=45))
         return {"ok": True, "kind": "chat-action", "action": action}
@@ -6789,22 +6877,31 @@ class Backend:
         finally:
             copy.unlink(missing_ok=True)
 
+    def _send_file_limit(self) -> int:
+        """The largest file this wacli can send (0.25 lifted the 100 MiB cap)."""
+        return MAX_SEND_FILE if self._wacli_at_least(WACLI_SEND_MAX_SIZE_VERSION) else MAX_FILE
+
     def send_file(self, jid: str, path: Path, mime: str = "", caption: str = "",
                   reply_id: str = "", album_id: str = "", album_index: int = 0,
                   album_count: int = 1) -> dict[str, Any]:
         chat = self._chat(jid)
-        self._validate_file(path)
+        size = self._validate_file(path, self._send_file_limit())
         quoted_id, reply_args = self._reply_args(chat, reply_id)
         with self._sync_visible_file(path) as sendable:
             command = ["--json", "send", "file", "--to", chat["jid"], "--file", str(sendable),
                        "--filename", path.name, "--as", "auto"]
+            if size > MAX_FILE:
+                # Only past wacli's default, and only on a wacli that has the
+                # flag (the limit above already refused it otherwise).
+                command.extend(["--max-size-mb", str(-(-size // (1024 * 1024)))])
             if mime:
                 command.extend(["--mime", mime])
             if caption.strip():
                 command.extend(["--caption", caption.strip()[:1024]])
             command.extend(reply_args)
             command.extend(["--post-send-wait", "0"])
-            envelope = self._envelope(self._write(command, timeout=120))
+            timeout = SEND_FILE_BASE_SECONDS + size // SEND_FILE_BYTES_PER_SECOND
+            envelope = self._envelope(self._write(command, timeout=timeout))
         data = envelope.get("data") if isinstance(envelope, dict) else None
         data = data if isinstance(data, dict) else {}
         message_id = self._sent_message_id(envelope)
@@ -6826,20 +6923,24 @@ class Backend:
                 "album_count": album_count}
 
     @staticmethod
-    def _validate_file(path: Path) -> int:
+    def _validate_file(path: Path, limit: int = MAX_FILE) -> int:
         try:
             size = path.stat().st_size
         except OSError as exc:
             raise OmaWhatsAppError("That pasted file is no longer available.") from exc
         if not path.is_file() or size <= 0:
             raise OmaWhatsAppError("The pasted file is empty.")
-        if size > MAX_FILE:
-            raise OmaWhatsAppError("The pasted file is too large (maximum 100 MB).")
+        if size > limit:
+            hint = "" if limit >= MAX_SEND_FILE else \
+                f"; wacli {WACLI_SEND_MAX_SIZE_VERSION} or newer sends up to {MAX_SEND_FILE // (1024 * 1024)} MB"
+            raise OmaWhatsAppError(
+                f"The file is too large (maximum {limit // (1024 * 1024)} MB{hint}).")
         return size
 
     @classmethod
     def _staged_file(cls, path: Path, mime: str = "") -> dict[str, Any]:
-        cls._validate_file(path)
+        # A pasted file is only staged; its send checks this wacli's own limit.
+        cls._validate_file(path, MAX_SEND_FILE)
         media_type = "image" if mime.startswith("image/") else "file"
         return {"ok": True, "kind": media_type, "path": path.as_uri(), "name": path.name}
 
@@ -6867,9 +6968,10 @@ class Backend:
         if len(values) > MAX_ATTACHMENTS:
             raise OmaWhatsAppError(f"Choose no more than {MAX_ATTACHMENTS} files at once.")
         paths = [self._local_path(value) for value in values]
+        limit = self._send_file_limit()
         for path in paths:
             try:
-                self._validate_file(path)
+                self._validate_file(path, limit)
             except OmaWhatsAppError as exc:
                 raise OmaWhatsAppError(f"{path.name or 'That file'}: {exc}") from exc
         mime_types = [mimetypes.guess_type(path.name)[0] or "" for path in paths]
@@ -7469,6 +7571,13 @@ class Backend:
             chat = exact(chat_flag, required=True)[0]
             message = exact(message_flag, required=True)[0]
             self._message_any(chat, message)
+
+        # wacli 0.22+: mark read only up to one exact stored message.
+        boundaries = self._transport_flag_values(args, "--through-message-id")
+        if boundaries:
+            if path != ("chats", "mark-read") or len(boundaries) != 1:
+                raise OmaWhatsAppError("Choose one exact local message to mark read through.")
+            self._message_any(exact("--chat", required=True)[0], boundaries[0])
 
         replies = self._transport_flag_values(args, "--reply-to")
         if replies:

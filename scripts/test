@@ -97,7 +97,7 @@ rg -q 'references/wacli-parity\.md' skills/omawhatsapp/SKILL.md
 ! rg -q 'TODO|\[TODO' skills/omawhatsapp
 python3 bin/omawhatsapp capabilities \
   | jq -e --arg version "$(sed -nE 's/^WACLI_PARITY_VERSION = "([^"]+)".*/\1/p' bin/omawhatsapp_core.py)" \
-    '.ok == true and .wacli_parity_version == $version and .operation_count == 108' >/dev/null
+    '.ok == true and .wacli_parity_version == $version and .operation_count == 111' >/dev/null
 while IFS= read -r -d '' qml_test; do
   QT_QPA_PLATFORM=offscreen WAYLAND_DISPLAY=/nonexistent/omawhatsapp-test "$qml_test_runner" \
     -input "$qml_test" \

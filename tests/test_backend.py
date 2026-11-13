@@ -1361,8 +1361,8 @@ class BackendTests(unittest.TestCase):
         self.assertNotIn("a1", [value["id"] for value in values])
 
     def test_sent_messages_carry_the_delivery_state_wacli_recorded(self) -> None:
-        # The owner asked for sent, delivered and read ticks. Only wacli builds
-        # that keep receipts have message_status; without it nothing is claimed.
+        # The owner asked for sent, delivered and read ticks. The OmaWhatsApp
+        # build keeps message_status; without any receipt table nothing is claimed.
         with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
             connection.executemany(
                 """INSERT INTO messages (chat_jid, chat_name, msg_id, sender_jid, sender_name,
@@ -1375,7 +1375,7 @@ class BackendTests(unittest.TestCase):
             )
         values = {value["id"]: value for value in self.backend.messages("team@g.us")["messages"]}
         self.assertFalse(any("status" in value for value in values.values()),
-                         "official wacli keeps no receipts: no ticks")
+                         "a store without receipts: no ticks")
         with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
             connection.execute("""CREATE TABLE message_status (
               chat_jid TEXT NOT NULL, msg_id TEXT NOT NULL, status INTEGER NOT NULL,
@@ -1400,6 +1400,57 @@ class BackendTests(unittest.TestCase):
             connection.execute("INSERT INTO message_status VALUES ('team@g.us', 'mine-last', 3, 1)")
         chat = next(item for item in self.backend.chats()["chats"] if item["jid"] == "team@g.us")
         self.assertEqual(chat["last_status"], "delivered", "the rail shows the last tick")
+
+    def test_official_wacli_receipts_become_ticks(self) -> None:
+        # wacli 0.21+ keeps each recipient's receipt; no private build needed.
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.executescript("""CREATE TABLE message_receipts (
+              chat_jid TEXT NOT NULL, msg_id TEXT NOT NULL, recipient_jid TEXT NOT NULL,
+              status TEXT NOT NULL, ts INTEGER NOT NULL,
+              PRIMARY KEY (chat_jid, msg_id, recipient_jid))""")
+            # wacli's member list holds this account too: two others to reach.
+            connection.execute(
+                "INSERT INTO group_participants VALUES ('team@g.us', 'me@s.whatsapp.net', 'member', 1)")
+            connection.execute(
+                "INSERT INTO message_receipts VALUES ('alex@s.whatsapp.net', 'a1', 'alex@s.whatsapp.net', 'delivered', 1)")
+            connection.execute(
+                "INSERT INTO message_receipts VALUES ('team@g.us', 't2', 'member@s.whatsapp.net', 'read', 1)")
+
+        def group_tick() -> str:
+            values = {value["id"]: value for value in self.backend.messages("team@g.us")["messages"]}
+            return values["t2"].get("status", "")
+
+        def dm_tick() -> str:
+            values = {value["id"]: value for value in self.backend.messages("alex@s.whatsapp.net")["messages"]}
+            return values["a1"].get("status", "")
+
+        self.assertEqual(dm_tick(), "delivered")
+        chat = next(item for item in self.backend.chats()["chats"] if item["jid"] == "alex@s.whatsapp.net")
+        self.assertEqual(chat["last_status"], "delivered", "the rail shows the receipt tick too")
+        self.assertEqual(group_tick(), "sent", "one of two members is not two ticks")
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.execute(
+                "UPDATE message_receipts SET status = 'read' WHERE msg_id = 'a1'")
+            connection.execute(
+                "INSERT INTO message_receipts VALUES ('team@g.us', 't2', 'admin@s.whatsapp.net', 'delivered', 2)")
+        self.assertEqual(dm_tick(), "read")
+        self.assertEqual(group_tick(), "delivered", "read by one member is not blue")
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.execute(
+                "UPDATE message_receipts SET status = 'read' WHERE msg_id = 't2'")
+            connection.execute(
+                "UPDATE message_receipts SET status = 'played' WHERE msg_id = 'a1'")
+        self.assertEqual(group_tick(), "read", "every other member read it")
+        self.assertEqual(dm_tick(), "played")
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.execute("DELETE FROM group_participants WHERE group_jid = 'team@g.us'")
+        self.assertEqual(group_tick(), "sent", "an unknown member list never claims everyone")
+        with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
+            connection.execute("""CREATE TABLE message_status (
+              chat_jid TEXT NOT NULL, msg_id TEXT NOT NULL, status INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL, PRIMARY KEY (chat_jid, msg_id))""")
+            connection.execute("INSERT INTO message_status VALUES ('alex@s.whatsapp.net', 'a1', 3, 1)")
+        self.assertEqual(dm_tick(), "delivered", "the OmaWhatsApp build's own state wins")
 
     def test_synthetic_placeholder_rows_are_neither_bubbles_nor_previews(self) -> None:
         with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
@@ -2421,7 +2472,7 @@ class BackendTests(unittest.TestCase):
             self.backend.chat_action("team@g.us", "read")
         self.assertNotIn("--receipts", write.call_args.args[0])
         self.backend.settings({"sender_read_receipts": True})
-        with mock.patch.object(self.backend, "_wacli_version", return_value="0.19.0"), \
+        with mock.patch.object(self.backend, "_wacli_version", return_value="0.26.0"), \
                 mock.patch.object(self.backend, "_write", return_value=completed) as write:
             self.backend.chat_action("team@g.us", "read")
             self.assertEqual(write.call_args.args[0], [
@@ -2437,11 +2488,11 @@ class BackendTests(unittest.TestCase):
 
     def test_sender_receipts_reject_unsupported_backend_and_unknown_target(self) -> None:
         self.backend.settings({"sender_read_receipts": True})
-        for version in ("0.17.1", "0.18.3", ""):
+        for version in ("0.19.0", "0.23.0", ""):
             with self.subTest(version=version), \
                     mock.patch.object(self.backend, "_wacli_version", return_value=version), \
                     mock.patch.object(self.backend, "_write") as write:
-                with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "0.19.0"):
+                with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "0.24.0"):
                     self.backend.chat_action("team@g.us", "read")
                 write.assert_not_called()
         with mock.patch.object(self.backend, "_write") as write:
@@ -2451,7 +2502,7 @@ class BackendTests(unittest.TestCase):
 
     def test_sender_receipts_preserve_offline_and_failure_guards(self) -> None:
         self.backend.settings({"sender_read_receipts": True})
-        with mock.patch.object(self.backend, "_wacli_version", return_value="0.19.0"), \
+        with mock.patch.object(self.backend, "_wacli_version", return_value="0.26.0"), \
                 mock.patch.object(self.backend, "online", return_value=False), \
                 mock.patch.object(backend_module, "run_bounded") as run:
             with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "Offline mode"):
@@ -2459,7 +2510,7 @@ class BackendTests(unittest.TestCase):
             run.assert_not_called()
         failure = subprocess.CompletedProcess([], 1,
             '{"success":false,"error":"Receipt dispatch failed"}', "")
-        with mock.patch.object(self.backend, "_wacli_version", return_value="0.20.0"), \
+        with mock.patch.object(self.backend, "_wacli_version", return_value="0.26.0"), \
                 mock.patch.object(self.backend, "_write", return_value=failure) as write:
             with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "Receipt dispatch failed"):
                 self.backend.chat_action("team@g.us", "read")
@@ -2730,6 +2781,46 @@ class BackendTests(unittest.TestCase):
         with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "no more than"):
             self.backend.send_files("team@g.us", [str(self.preview)] * 11)
 
+    def test_large_files_need_wacli_025_and_name_their_own_cap(self) -> None:
+        # Sparse files: their size is real, their bytes are not written.
+        large = self.root / "large.mp4"
+        with large.open("wb") as handle:
+            handle.truncate(backend_module.MAX_FILE + 1)
+        huge = self.root / "huge.zip"
+        with huge.open("wb") as handle:
+            handle.truncate(backend_module.MAX_SEND_FILE + 1)
+        completed = subprocess.CompletedProcess([], 0,
+            '{"success":true,"data":{"id":"big","file":{"mime_type":"video/mp4","media":"video"}}}', "")
+        with mock.patch.object(backend_module.Backend, "PRIVATE_TMP_ROOTS", ()):
+            with mock.patch.object(self.backend, "_wacli_version", return_value="0.24.0"), \
+                    mock.patch.object(self.backend, "_write") as write:
+                with self.assertRaisesRegex(backend_module.OmaWhatsAppError,
+                                            r"maximum 100 MB; wacli 0\.25\.0 or newer"):
+                    self.backend.send_files("team@g.us", [str(large)])
+                write.assert_not_called()
+            with mock.patch.object(self.backend, "_wacli_version", return_value="0.26.0"), \
+                    mock.patch.object(self.backend, "_write", return_value=completed) as write:
+                self.backend.send_files("team@g.us", [str(large)])
+                command = write.call_args.args[0]
+                self.assertEqual(command[command.index("--max-size-mb") + 1], "101",
+                                 "the cap is the file's own size, rounded up to whole MiB")
+                self.assertGreater(write.call_args.kwargs["timeout"], 120,
+                                   "a big upload gets more time than a photo")
+                self.backend.send_files("team@g.us", [str(self.document)])
+                self.assertNotIn("--max-size-mb", write.call_args.args[0],
+                                 "small files keep wacli's default")
+                self.assertEqual(write.call_args.kwargs["timeout"], 120)
+                write.reset_mock()
+                with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "maximum 2048 MB"):
+                    self.backend.send_files("team@g.us", [str(huge)])
+                write.assert_not_called()
+            # An unreadable version is never assumed to have the flag.
+            with mock.patch.object(self.backend, "_wacli_version", return_value=""), \
+                    mock.patch.object(self.backend, "_write") as write:
+                with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "maximum 100 MB"):
+                    self.backend.send_file("team@g.us", large)
+                write.assert_not_called()
+
     def test_live_delegate_path_does_not_stop_sync(self) -> None:
         completed = subprocess.CompletedProcess([], 0, '{"success":true}', "")
         with mock.patch.object(self.backend, "_run", return_value=completed), \
@@ -2901,7 +2992,7 @@ class BackendTests(unittest.TestCase):
             self.assertNotIn("--download-media", exec_start)
 
     def test_about_reports_versions_install_mode_and_disk_use(self) -> None:
-        self.wacli.write_text("#!/bin/sh\necho 'wacli 0.18.3'\n", encoding="utf-8")
+        self.wacli.write_text("#!/bin/sh\necho 'wacli 0.25.1'\n", encoding="utf-8")
         plugin = self.root / "plugin"
         plugin.mkdir()
         (plugin / "manifest.json").write_text('{"version": "0.14.0"}', encoding="utf-8")
@@ -2914,8 +3005,8 @@ class BackendTests(unittest.TestCase):
         about = self.backend.about(plugin_dir=plugin)
         self.assertEqual(about["app_version"], "0.14.0")
         self.assertEqual(about["install_mode"], "git")
-        self.assertEqual(about["wacli_version"], "0.18.3")
-        self.assertEqual(about["wacli_minimum_version"], "0.17.1")
+        self.assertEqual(about["wacli_version"], "0.25.1")
+        self.assertEqual(about["wacli_minimum_version"], "0.24.0")
         store = about["stores"][0]
         self.assertEqual(store["media_bytes"], 1000, "symlinks are not followed")
         self.assertEqual(store["media_files"], 1)
@@ -2925,21 +3016,26 @@ class BackendTests(unittest.TestCase):
         with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "too long"):
             self.backend.send("alex@s.whatsapp.net", "x" * 4097)
 
-    def test_wacli_parity_registry_covers_every_0183_leaf(self) -> None:
+    def test_wacli_parity_registry_covers_every_0260_leaf(self) -> None:
         policies = backend_module.WACLI_OPERATION_POLICIES
-        self.assertEqual(len(policies), 108)
-        # Presence and starring exist only in the wacli fork's builds; the
-        # parity check accepts their absence on official releases.
+        self.assertEqual(len(policies), 111)
+        # Lease presence and starring exist only in the OmaWhatsApp wacli
+        # build; the parity check accepts their absence on official releases.
+        # Official 0.21+ has `presence subscribe` itself.
         self.assertEqual(backend_module.WACLI_OPTIONAL_LEAVES, {
-            ("messages", "star"),
-            ("presence", "available"), ("presence", "subscribe"), ("presence", "unavailable")})
+            ("messages", "star"), ("presence", "available"), ("presence", "unavailable")})
         self.assertTrue(backend_module.WACLI_OPTIONAL_LEAVES <= set(policies))
         self.assertEqual(policies[("presence", "subscribe")], "remote-read")
+        # New in 0.20-0.24: offline lookups stay reads; an account-wide
+        # contact save is a WhatsApp write on an exact known contact.
+        self.assertEqual(policies[("contacts", "resolve")], "local-read")
+        self.assertEqual(policies[("messages", "changes")], "local-read")
+        self.assertEqual(policies[("contacts", "save")], "whatsapp-write")
+        self.assertIn(("contacts", "save"), backend_module.WACLI_CONTACT_JID_OPERATIONS)
         self.assertEqual(policies[("groups", "participants", "list")], "local-read")
         self.assertIn(("groups", "participants", "list"),
                       backend_module.WACLI_GROUP_JID_OPERATIONS)
         leaf_minimums = backend_module.WACLI_LEAF_MINIMUM_VERSIONS
-        self.assertEqual(leaf_minimums[("groups", "participants", "list")], "0.18.0")
         self.assertTrue(set(leaf_minimums) <= set(policies))
         self.assertEqual(len(set(policies)), len(policies))
         self.assertEqual(set(policies.values()), {
@@ -2947,13 +3043,29 @@ class BackendTests(unittest.TestCase):
             "whatsapp-write", "destructive", "interactive",
         })
         capabilities = self.backend.capabilities()
-        self.assertEqual(capabilities["wacli_parity_version"], "0.19.0")
-        self.assertEqual(capabilities["wacli_minimum_version"], "0.17.1")
+        self.assertEqual(capabilities["wacli_parity_version"], "0.26.0")
+        self.assertEqual(capabilities["wacli_minimum_version"], "0.24.0")
         self.assertEqual(capabilities["operation_count"], len(policies))
         self.assertEqual(len(capabilities["operations"]), len(policies))
         by_name = {item["operation"]: item for item in capabilities["operations"]}
-        self.assertEqual(by_name["groups participants list"]["min_wacli"], "0.18.0")
-        self.assertEqual(by_name["send text"]["min_wacli"], "0.17.1")
+        self.assertEqual(by_name["contacts save"]["min_wacli"], "0.24.0")
+        self.assertEqual(by_name["send text"]["min_wacli"], "0.24.0")
+
+    def test_contact_save_needs_an_exact_known_contact(self) -> None:
+        # wacli 0.24 would save any typed phone number account-wide.
+        with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "not available in the local"):
+            self.backend.transport({
+                "args": ["contacts", "save", "--account-wide", "--jid", "15550000000@s.whatsapp.net",
+                         "--name", "Someone"],
+                "authorization": "whatsapp-write"})
+
+    def test_mark_read_boundary_must_be_a_stored_message_of_that_chat(self) -> None:
+        # a1 belongs to Alex's chat: it can never bound a read in the group.
+        with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "not available in the exact"):
+            self.backend.transport({
+                "args": ["chats", "mark-read", "--chat", "team@g.us",
+                         "--through-message-id", "a1"],
+                "authorization": "whatsapp-write"})
 
     def test_wacli_local_read_is_json_and_read_only(self) -> None:
         completed = subprocess.CompletedProcess(
@@ -4207,7 +4319,7 @@ sys.exit(0)
         self.backend.use_account("home")
         self.assertFalse(self.backend.settings()["sender_read_receipts"])
         completed = subprocess.CompletedProcess([], 0, '{"success":true}', "")
-        with mock.patch.object(self.backend, "_wacli_version", return_value="0.19.0"), \
+        with mock.patch.object(self.backend, "_wacli_version", return_value="0.26.0"), \
                 mock.patch.object(self.backend, "_write", return_value=completed) as write:
             # Same synthetic JID in both stores must not share preferences.
             self.backend.chat_action("shared@s.whatsapp.net", "read")

@@ -969,7 +969,8 @@ class BackendHardeningTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             wacli = root / "wacli"
-            wacli.write_text("#!/bin/sh\necho 'wacli 0.16.9'\n", encoding="utf-8")
+            # 0.23 is below the floor on purpose: its archive recovery bug (#501).
+            wacli.write_text("#!/bin/sh\necho 'wacli 0.23.0'\n", encoding="utf-8")
             wacli.chmod(0o700)
             (root / "store").mkdir()
             backend = backend_module.Backend(store_dir=root / "store", state_dir=root / "state",
@@ -977,14 +978,14 @@ class BackendHardeningTests(unittest.TestCase):
             status = backend.status()
             self.assertFalse(status["ok"])
             self.assertTrue(status["wacli_too_old"])
-            self.assertIn("older than 0.17.1", status["error"])
+            self.assertIn("older than 0.24.0", status["error"])
             self.assertIn("omarchy pkg aur add wacli-bin", status["error"])
-            with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "older than 0.17.1"):
+            with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "older than 0.24.0"):
                 backend.setup(True, False)
             # The version is cached until the binary changes.
-            wacli.write_text("#!/bin/sh\necho 'wacli 0.19.0'\n", encoding="utf-8")
+            wacli.write_text("#!/bin/sh\necho 'wacli 0.26.0'\n", encoding="utf-8")
             os.utime(wacli, ns=(wacli.stat().st_atime_ns, wacli.stat().st_mtime_ns + 1_000_000))
-            self.assertEqual(backend._wacli_version(), "0.19.0")
+            self.assertEqual(backend._wacli_version(), "0.26.0")
         parity = (SCRIPT.parent.parent / "scripts" / "check-wacli-parity").read_text(encoding="utf-8")
         self.assertIn("WACLI_MINIMUM_VERSION", parity)
         self.assertIn("locate_wacli()", parity, "the parity check uses the app's own wacli")
