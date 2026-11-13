@@ -32,6 +32,12 @@ two-pane window down to a 360 px single pane.
 Both open from the local mirror without waiting for the network, and closing
 them keeps the chat list warm in the resident service.
 
+**Under a replacement bar.** A cloned `omarchy.bar` gives its widgets no access
+to the app's service ([omacom/omarchy#11051](https://github.com/omacom/omarchy/issues/11051)),
+so the icon there has no badge and no dropdown. It stays on the bar, its
+tooltip says why, and a click opens the full app through the app's own IPC.
+The stock bar keeps everything.
+
 ## Chats and the chat list
 
 - Every locally synced direct message and group, groups inside a Community
@@ -218,6 +224,28 @@ The helper is also a command line tool for scripts and agents; `omawhatsapp
 --help` lists its commands. Its guarded wacli gateway, the agent skill and the
 MCP server are described in the [README](../README.md#let-your-agent-use-whatsapp)
 and in the [agent gateway reference](../skills/omawhatsapp/references/wacli-parity.md).
+
+### Open a chat from a picker
+
+`omawhatsapp launcher-chats` prints the chat list, newest first, one chat per
+line: the name, the account and the chat's ID, separated by tabs (at most 500
+chats, or `--limit`). It only reads the local mirror. Pipe the line you pick
+into `omawhatsapp launcher-open` and the full app opens on that chat:
+
+```bash
+omawhatsapp launcher-chats | fzf --delimiter='\t' --with-nth=1 | omawhatsapp launcher-open
+```
+
+Any picker that returns the chosen line unchanged works the same way. The
+chosen chat travels on standard input and reaches the shell as a one-use
+token, so no chat ID shows up in a process list; a line for a chat that is not
+in the chat list is refused.
+
+Omarchy's own launcher cannot list chats yet: Omarchy 4.5 replaced Walker and
+Elephant with the shell's Quickshell menu, whose runtime row sources are a
+fixed set inside the shell (`providers` in `shell/plugins/menu/Menu.qml`), and
+its user extension file takes static rows only. Writing chat names into that
+file would keep private names in a config file, so OmaWhatsApp does not.
 
 ### Customize your keyboard
 

@@ -3,6 +3,8 @@ name: validate
 on:
   push:
   pull_request:
+  # upstream-sync dispatches the gate on its branch: pushes by GITHUB_TOKEN start no workflow.
+  workflow_dispatch:
 
 permissions:
   contents: read

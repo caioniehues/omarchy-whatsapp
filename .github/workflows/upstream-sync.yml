@@ -1,0 +1,120 @@
+name: upstream-sync
+
+# Weekly, or by hand: merge MoizIbnYousaf/Omarchy-Whatsapp main into the
+# `upstream-sync` branch and keep one pull request open against main.
+#
+# Pushes made with GITHUB_TOKEN do not start other workflows, so the release
+# gate is dispatched on the branch explicitly. An optional UPSTREAM_SYNC_TOKEN
+# secret (a fine-grained token with contents, pull requests and workflows
+# write on this repository) replaces GITHUB_TOKEN: its pushes start CI by
+# themselves, and it may push an upstream change to a workflow file, which
+# GITHUB_TOKEN is never allowed to do.
+on:
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      actions: write
+    env:
+      UPSTREAM_URL: https://github.com/MoizIbnYousaf/Omarchy-Whatsapp.git
+      SYNC_BRANCH: upstream-sync
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      PERSONAL_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN != '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+
+      - name: Merge upstream main
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch --no-tags "$UPSTREAM_URL" main
+          upstream=$(git rev-parse FETCH_HEAD)
+          echo "upstream=$upstream" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$upstream" HEAD; then
+            echo "main already contains upstream ${upstream:0:7}." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git switch -C "$SYNC_BRANCH"
+          if ! git merge --no-ff --no-edit -m "chore: merge upstream ${upstream:0:7} into main" "$upstream"; then
+            {
+              echo "## Upstream ${upstream:0:7} does not merge cleanly"
+              echo
+              echo "Conflicting paths:"
+              echo
+              git diff --name-only --diff-filter=U | sed 's/^/- `/; s/$/`/'
+              echo
+              echo "Resolve it locally:"
+              echo
+              echo '```bash'
+              echo "git fetch upstream && git switch -C $SYNC_BRANCH origin/main"
+              echo "git merge upstream/main   # resolve, then commit"
+              echo "git push --force-with-lease origin $SYNC_BRANCH"
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            echo "::error::Upstream main conflicts with main; see the run summary."
+            exit 1
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push the sync branch
+        if: steps.merge.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          remote=$(git ls-remote origin "refs/heads/$SYNC_BRANCH" | cut -f1)
+          if ! git push --force-with-lease="$SYNC_BRANCH:$remote" origin "HEAD:refs/heads/$SYNC_BRANCH"; then
+            if [ "$PERSONAL_TOKEN" != "true" ] && git diff --name-only origin/main HEAD | grep -q '^\.github/workflows/'; then
+              echo "::error::Upstream changes a workflow file, which GITHUB_TOKEN may not push. Add an UPSTREAM_SYNC_TOKEN secret or merge by hand."
+            fi
+            exit 1
+          fi
+
+      - name: Open or update the pull request
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          UPSTREAM: ${{ steps.merge.outputs.upstream }}
+        run: |
+          set -euo pipefail
+          {
+            echo "Merges [MoizIbnYousaf/Omarchy-Whatsapp](https://github.com/MoizIbnYousaf/Omarchy-Whatsapp) main at ${UPSTREAM:0:7} into main."
+            echo
+            echo "Upstream commits not yet on main:"
+            echo
+            git log --no-merges --format='- %h %s' "origin/main..$UPSTREAM" | head -n 100
+            echo
+            echo "Opened by the upstream-sync workflow. Before merging, check that the"
+            echo "fork's plugin id, version and changelog survived, and run the release gate."
+          } > "$RUNNER_TEMP/body.md"
+          number=$(gh pr list --head "$SYNC_BRANCH" --base main --state open --json number --jq '.[0].number // empty')
+          if [ -n "$number" ]; then
+            gh pr edit "$number" --body-file "$RUNNER_TEMP/body.md"
+            echo "Updated #$number." >> "$GITHUB_STEP_SUMMARY"
+          elif ! gh pr create --head "$SYNC_BRANCH" --base main \
+              --title "chore: merge upstream ${UPSTREAM:0:7}" --body-file "$RUNNER_TEMP/body.md"; then
+            echo "::error::Could not open the pull request. With GITHUB_TOKEN, enable Settings → Actions → General → Allow GitHub Actions to create and approve pull requests, or add an UPSTREAM_SYNC_TOKEN secret."
+            exit 1
+          fi
+
+      - name: Run the release gate on the branch
+        if: steps.merge.outputs.changed == 'true' && env.PERSONAL_TOKEN != 'true'
+        run: gh workflow run validate.yml --ref "$SYNC_BRANCH"

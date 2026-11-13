@@ -1,5 +1,6 @@
 import QtQuick
 import QtTest
+import Quickshell
 import "../plugins/omawhatsapp" as Oma
 
 // The bar item: left click opens the dropdown, middle click clears the badge,
@@ -105,5 +106,31 @@ TestCase {
     verify(!h.service.closed)
     h.button.pressed(Qt.LeftButton)
     compare(h.service.launches, 1, "an open one just toggles its dropdown")
+  }
+
+  function test_a_bar_without_the_service_keeps_a_working_icon() {
+    // Upstream #30: a cloned omarchy.bar answers serviceFor() with null.
+    var bar = createTemporaryObject(barComponent, testCase, { vertical: false })
+    var widget = createTemporaryObject(widgetComponent, testCase, { bar: bar })
+    var button = findChild(widget, "barButton")
+    compare(widget.oma, null)
+    compare(button.text, "󰖣", "the icon stays on the bar")
+    verify(!button.dimmed)
+    verify(button.tooltipText.indexOf("click to open the app") !== -1, button.tooltipText)
+    Quickshell.detached = []
+    button.pressed(Qt.LeftButton)
+    compare(Quickshell.detached.length, 1)
+    compare(Quickshell.detached[0], ["omarchy-shell", "io.github.caioniehues.omawhatsapp", "openApp", "{}"])
+    button.pressed(Qt.MiddleButton)
+    button.pressed(Qt.RightButton)
+    compare(Quickshell.detached.length, 1, "only a left click opens the app")
+
+    // Once the service appears, the click goes back to the dropdown.
+    var service = createTemporaryObject(serviceComponent, testCase)
+    bar.service = service
+    tryVerify(function() { return widget.oma === service })
+    button.pressed(Qt.LeftButton)
+    compare(Quickshell.detached.length, 1)
+    compare(button.tooltipText, "tooltip")
   }
 }

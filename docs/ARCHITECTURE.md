@@ -13,7 +13,9 @@ wacli fit together, and where each one's responsibility ends.
 - `App.qml` is owned once by the resident service. Its window remains hidden
   until summoned and owns composition, focus, filtering, and visible drafts.
 - `BarWidget.qml` hosts `Dropdown.qml`, a bar-anchored recent-chat view over
-  the existing service. It never creates another backend or poller.
+  the existing service. It never creates another backend or poller. When the
+  bar's facade has no service (a replacement bar), it hosts nothing and its
+  click asks the service's IPC target to open the full app.
 - `bin/omawhatsapp` is a bounded local bridge; it is not a daemon. Its focused
   commands serve the graphical client, while its classified `wacli` gateway
   accounts for every command leaf in the supported transport version.
