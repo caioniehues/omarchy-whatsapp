@@ -127,6 +127,7 @@ Rectangle {
   }
   signal filterRequested(string filter)
   signal openChatRequested(string jid, string name, string phone)
+  signal starredRequested()
 
   function dateText(ts) {
     var value = Number(ts || 0)
@@ -422,6 +423,8 @@ Rectangle {
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
         }
+        HoverHandler { id: starredHover; cursorShape: Qt.PointingHandCursor }
+        TapHandler { onTapped: root.starredRequested() }
       }
 
       Row {

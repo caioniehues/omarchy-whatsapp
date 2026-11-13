@@ -12,6 +12,8 @@ The following are the defaults. A custom Send message binding takes precedence o
 | Show or hide chat list | `Ctrl+B` |
 | Start a new chat | `Ctrl+N` |
 | Go to a chat by name | `Ctrl+K` |
+| Open status updates | `Ctrl+Shift+U` |
+| Open starred messages | `Ctrl+Shift+S` |
 | Open chat 1–9 | `Alt+1` … `Alt+9` |
 | Attach documents | `Ctrl+O` |
 | Attach photos and videos | `Ctrl+Shift+O` |
@@ -34,6 +36,9 @@ In the full app, Alt+1–9 opens the corresponding conversation in the current c
 | Step back | `Escape` |
 | Scroll conversation up | `PageUp` |
 | Scroll conversation down | `PageDown` |
+| Unstar selected starred message | `U` |
+
+In status updates and starred messages, J/K (or the arrows) move through the list, Enter opens the selected person or message and Esc steps back. Inside one person's status updates, Left/Right (the media viewer's previous and next keys) or J/K go through them, and Space plays a photo or video that is on this computer.
 
 ## Writing
 

@@ -9,6 +9,7 @@ Everything the app does, where to find it, and every shortcut. The
 - [Chats and the chat list](#chats-and-the-chat-list)
 - [Writing and sending](#writing-and-sending)
 - [Messages you receive](#messages-you-receive)
+- [Status updates and starred messages](#status-updates-and-starred-messages)
 - [Reading, ticks and presence](#reading-ticks-and-presence)
 - [Notifications and the bar badge](#notifications-and-the-bar-badge)
 - [Several accounts](#several-accounts)
@@ -95,6 +96,20 @@ them keeps the chat list warm in the resident service.
 - With [Omasnap](https://github.com/tobi/omasnap) installed, Open externally
   sends images to its annotation editor.
 - Select text to copy it, or use Copy in the message menu.
+
+## Status updates and starred messages
+
+- **Status updates** (`Ctrl+Shift+U`, or the ring button above the chat list)
+  lists the people who posted in the last 24 hours, yours first, from every
+  account. Open one to go through their updates, oldest first, with Left/Right.
+  Viewing is private: it reads this computer's copy and sends no read receipt.
+  wacli does not download status photos and videos, so those say to open them
+  on your phone unless the file is already here.
+- **Starred messages** (`Ctrl+Shift+S`, the star button, or the starred count
+  in chat details for one chat) lists every starred message, newest star first.
+  Enter or a click opens its chat on that message, loading older history when
+  it needs to; `U` or the button unstars it, with a wacli build that stars and
+  for the account whose chat is open.
 
 ## Reading, ticks and presence
 

@@ -1172,6 +1172,47 @@ Item {
     chatDetailsProcess.running = true
     return true
   }
+  // Status updates and starred messages: local reads of every account's
+  // mirror while their view is open. Neither runs wacli, so looking at a
+  // status never tells its author it was seen.
+  property var statusUpdates: []
+  property bool statusUpdatesLoading: false
+  property bool statusUpdatesWanted: false
+  property bool statusUpdatesPending: false
+  onStatusUpdatesWantedChanged: if (statusUpdatesWanted) refreshStatusUpdates()
+  function refreshStatusUpdates() {
+    if (statusesProcess.running) { statusUpdatesPending = true; return false }
+    statusUpdatesLoading = true
+    statusesProcess.payload = JSON.stringify({ all_accounts: true })
+    statusesProcess.stdinEnabled = true
+    statusesProcess.running = true
+    return true
+  }
+  // An empty jid lists every chat of every account; a chat ref only that chat.
+  property var starredItems: []
+  property bool starredLoading: false
+  property bool starredWanted: false
+  property bool starredPending: false
+  property var starredScope: AccountModel.chatRef("", "")
+  onStarredWantedChanged: if (starredWanted) refreshStarred()
+  function setStarredScope(chatRef) {
+    var next = AccountModel.chatRef(chatRef ? chatRef.account : "", chatRef ? chatRef.jid : "")
+    if (next.key === starredScope.key) return
+    starredScope = next
+    starredItems = []
+    if (starredWanted) refreshStarred()
+  }
+  function refreshStarred() {
+    if (starredProcess.running) { starredPending = true; return false }
+    starredLoading = true
+    starredProcess.scope = starredScope
+    starredProcess.payload = JSON.stringify(starredScope.jid === ""
+      ? { all_accounts: true, limit: 500 }
+      : { account: starredScope.account, jid: starredScope.jid, limit: 500 })
+    starredProcess.stdinEnabled = true
+    starredProcess.running = true
+    return true
+  }
   function searchPeople(query) {
     newChatPeopleQuery = String(query || "").trim()
     if (contactsProcess.running) { newChatPeoplePending = true; return true }
@@ -2025,6 +2066,8 @@ Item {
         root.refreshMessages()
         root.refreshMembers()
         if (root.chatDetailsWanted) root.refreshChatDetails()
+        if (root.statusUpdatesWanted) root.refreshStatusUpdates()
+        if (root.starredWanted) root.refreshStarred()
       }
     }
   }
@@ -2320,6 +2363,50 @@ Item {
         var next = root.browserPendingKind
         root.browserPendingKind = ""
         Qt.callLater(function() { root.browseMedia(next) })
+      }
+    }
+  }
+
+  Process {
+    id: statusesProcess
+    objectName: "statusesProcess"
+    property string payload: ""
+    command: [root.helper, "statuses"]
+    stdinEnabled: true
+    stdout: StdioCollector { id: statusesOutput }
+    stderr: StdioCollector { }
+    onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
+    onExited: function(exitCode) {
+      root.statusUpdatesLoading = false
+      var payload = root.parseJson(statusesOutput.text)
+      if (exitCode === 0 && payload && payload.ok === true)
+        root.statusUpdates = Array.isArray(payload.statuses) ? payload.statuses : []
+      if (root.statusUpdatesPending) {
+        root.statusUpdatesPending = false
+        Qt.callLater(root.refreshStatusUpdates)
+      }
+    }
+  }
+
+  Process {
+    id: starredProcess
+    objectName: "starredProcess"
+    property string payload: ""
+    property var scope: AccountModel.chatRef("", "")
+    command: [root.helper, "starred"]
+    stdinEnabled: true
+    stdout: StdioCollector { id: starredOutput }
+    stderr: StdioCollector { }
+    onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
+    onExited: function(exitCode) {
+      root.starredLoading = false
+      var payload = root.parseJson(starredOutput.text)
+      // An answer for a scope left meanwhile is dropped.
+      if (exitCode === 0 && payload && payload.ok === true && scope.key === root.starredScope.key)
+        root.starredItems = Array.isArray(payload.starred) ? payload.starred : []
+      if (root.starredPending) {
+        root.starredPending = false
+        Qt.callLater(root.refreshStarred)
       }
     }
   }
@@ -2830,6 +2917,7 @@ Item {
           state: "sent", message_id: String(payload.message_id || ""), created: Date.now() })
       if (["contact-alias", "contact-tag", "download-pending"].indexOf(finishedKind) >= 0
           && root.chatDetailsWanted) Qt.callLater(root.refreshChatDetails)
+      if (finishedKind === "star" && root.starredWanted) Qt.callLater(root.refreshStarred)
       if (["forward", "delete", "send-new", "star"].indexOf(finishedKind) >= 0 && finishedRequest.batch === true)
         root.finishBatchJob(true, "")
       // What the helper answered, for surfaces that report it (exports, downloads).

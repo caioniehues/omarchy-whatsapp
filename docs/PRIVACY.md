@@ -41,6 +41,8 @@ which dispatches receipts for stored unread incoming messages instead of an
 app-state patch. WhatsApp privacy settings still apply: receipts may be
 self-only, and a successful command does not guarantee sender-visible blue ticks.
 Mark-unread and local badge acknowledgement never send sender receipts.
+Looking at status updates in the app never reaches WhatsApp: the list is read
+from the local mirror only, so no author is told their status was seen.
 
 With a wacli build that keeps receipts, the mirror also records when each
 recipient received, read, or played the messages you sent, as WhatsApp
