@@ -192,6 +192,11 @@ TestCase {
       property bool hasOlderMessages: true
       property int olderRequests: 0
       function loadOlderMessages() { olderRequests += 1; return true }
+      property string selectedBackfillState: "idle"
+      property string selectedBackfillMessage: ""
+      property bool selectedChatOnline: true
+      property int backfillRequests: 0
+      function requestHistoryBackfill() { backfillRequests += 1; selectedBackfillState = "running"; return true }
       property bool chatDetailsWanted: false
       property var browserItems: []
       property bool browserLoading: false
@@ -639,6 +644,69 @@ TestCase {
     var hint = findChild(h.app, "olderMessagesHint")
     verify(hint !== null)
     compare(hint.text, "Start of this computer's copy of the chat")
+  }
+
+  readonly property var twoMessages: [
+    { id: "m2", text: "second", sender: "Synthetic", timestamp: 1787540100, from_me: false, media_type: "", reactions: [] },
+    { id: "m1", text: "first", sender: "Synthetic", timestamp: 1787540000, from_me: false, media_type: "", reactions: [] }
+  ]
+
+  function test_the_phone_is_offered_only_once_the_local_copy_ends_and_only_on_click() {
+    var h = createHarness({ messages: twoMessages })
+    var action = findChild(h.app, "historyBackfillAction")
+    var label = findChild(h.app, "historyBackfillActionLabel")
+    var status = findChild(h.app, "historyBackfillStatus")
+    verify(action !== null && label !== null && status !== null)
+    verify(!action.visible, "older local pages come before the phone")
+    h.service.hasOlderMessages = false
+    tryVerify(function() { return action.visible })
+    compare(label.text, "Load older messages from your phone")
+    wait(300)
+    compare(h.service.backfillRequests, 0, "reaching the top asks the phone nothing by itself")
+    mouseClick(action)
+    compare(h.service.backfillRequests, 1)
+    verify(!action.visible, "one request at a time")
+    compare(status.text, "Asking your phone for older messages…")
+
+    h.service.selectedBackfillState = "failed"
+    h.service.selectedBackfillMessage = "Synthetic failure"
+    verify(action.visible)
+    compare(label.text, "Try again")
+    compare(status.text, "Synthetic failure")
+    compare(String(status.color), String(h.app.urgent))
+    wait(300)
+    compare(h.service.backfillRequests, 1, "a failure is never retried by itself")
+
+    h.service.selectedBackfillState = "done"
+    h.service.selectedBackfillMessage = "3 older messages arrived from your phone"
+    compare(label.text, "Load more from your phone")
+    compare(status.text, "3 older messages arrived from your phone")
+
+    h.service.selectedBackfillState = "busy"
+    verify(!action.visible, "another chat's request is still out")
+    compare(status.text, "Your phone is still answering for another chat…")
+
+    h.service.selectedBackfillState = "idle"
+    h.service.selectedChatOnline = false
+    verify(!action.visible, "a paused account asks nothing of the phone")
+    verify(status.text.indexOf("Background sync is paused") === 0, status.text)
+    verify(!h.app.requestHistoryBackfill())
+    compare(h.service.backfillRequests, 1)
+  }
+
+  function test_demo_mode_loads_synthetic_older_messages_without_a_service() {
+    var app = createTemporaryObject(appComponent, testCase, { demoMode: true, opened: true })
+    var action = findChild(app, "historyBackfillAction")
+    verify(action !== null)
+    tryVerify(function() { return action.visible })
+    var before = app.demoItems.length
+    verify(app.requestHistoryBackfill())
+    compare(app.demoItems.length, before + 2)
+    compare(app.demoItems[app.demoItems.length - 1].id, "demo-0a", "the oldest goes last")
+    compare(findChild(app, "historyBackfillStatus").text, "2 older messages arrived from your phone")
+    verify(app.requestHistoryBackfill())
+    compare(app.demoItems.length, before + 2, "the synthetic history arrives once")
+    compare(findChild(app, "historyBackfillStatus").text, "Your phone has no older messages for this chat")
   }
 
   function test_ctrl_k_jumps_to_a_chat_by_name() {
