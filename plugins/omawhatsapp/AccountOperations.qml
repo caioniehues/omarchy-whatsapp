@@ -18,7 +18,11 @@ Item {
   property string linkTarget: ""
   property int linkPolls: 0
   readonly property bool linkBusy: linkPhase !== "idle"
-  readonly property bool busy: linkBusy || avatarBusy
+  // Settings → Media → Re-download missing voice notes (wacli media retry
+  // --type audio): the sync pauses while the phone re-uploads them.
+  property bool voiceRetryBusy: false
+  property string voiceRetryMessage: ""
+  readonly property bool busy: linkBusy || avatarBusy || voiceRetryBusy
 
   signal refreshRequested()
 
@@ -175,6 +179,33 @@ Item {
     refreshRequested()
   }
 
+  function retryVoiceNotes(account) {
+    if (busy) return false
+    voiceRetryBusy = true
+    voiceRetryMessage = "Asking your phone for missing voice notes…"
+    voiceRetryProcess.payload = JSON.stringify({ authorization: "sync", account: String(account || "") })
+    voiceRetryProcess.stdinEnabled = true
+    voiceRetryProcess.running = true
+    return true
+  }
+
+  function finishVoiceRetry(exitCode, stdoutText, stderrText) {
+    voiceRetryBusy = false
+    var response = parseJson(stdoutText)
+    if (exitCode !== 0 || !response || response.ok !== true) {
+      voiceRetryMessage = (response && response.error)
+        || String(stderrText || "Voice notes could not be re-downloaded.").trim()
+      return
+    }
+    var recovered = Math.max(0, Number(response.recovered || 0))
+    var requested = Math.max(0, Number(response.requested || 0))
+    var gone = Math.max(0, Number(response.not_on_phone || 0))
+    voiceRetryMessage = requested === 0 ? "No voice notes are missing"
+      : String(recovered) + " of " + String(requested) + " voice notes re-downloaded"
+        + (gone > 0 ? "; " + String(gone) + " are no longer on your phone" : "")
+    refreshRequested()
+  }
+
   onAccountsChanged: reconcileLink()
 
   Timer {
@@ -234,6 +265,19 @@ Item {
     onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
     onExited: function(exitCode) {
       root.finishAvatarRefresh(exitCode, avatarOutput.text, avatarError.text)
+    }
+  }
+
+  Process {
+    id: voiceRetryProcess
+    property string payload: ""
+    command: [root.helper, "retry-voice-notes"]
+    stdinEnabled: true
+    stdout: StdioCollector { id: voiceRetryOutput }
+    stderr: StdioCollector { id: voiceRetryError }
+    onStarted: { write(payload + "\n"); payload = ""; stdinEnabled = false }
+    onExited: function(exitCode) {
+      root.finishVoiceRetry(exitCode, voiceRetryOutput.text, voiceRetryError.text)
     }
   }
 }

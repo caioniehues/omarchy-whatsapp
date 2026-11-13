@@ -765,6 +765,10 @@ def history_pairing_args(value: Any) -> list[str]:
 # Chats checked per explicit refresh. Each refresh yields the sync unit
 # while it runs, so a larger batch means fewer restarts for the same work.
 AVATAR_REFRESH_LIMIT = 64
+# "Re-download missing voice notes": three of wacli's 32-message retry
+# batches per click, within a deadline that covers each batch's two waits.
+VOICE_RETRY_LIMIT = 96
+VOICE_RETRY_SECONDS = 600
 # Each photo lookup is its own wacli connection holding the store lock, so a
 # batch stops starting lookups after this long; the rest stay due.
 AVATAR_BATCH_SECONDS = 20.0
@@ -4005,6 +4009,30 @@ class Backend:
         for chat, key in keyed:
             chat["avatar_path"] = paths.get(key, "")
 
+    def retry_voice_notes(self, authorization: Any) -> dict[str, Any]:
+        """Ask the phone to re-upload voice notes whose download expired.
+
+        `media retry --type audio` (wacli 0.21) needs the store, so the
+        account's sync yields for it and restarts afterwards, even on failure,
+        like any other maintenance. It is bounded: a few batches per click,
+        each waiting at most 30 seconds for the phone.
+        """
+        if str(authorization or "") != "sync":
+            raise OmaWhatsAppError("Re-downloading voice notes requires authorization='sync'.")
+        if not self.online():
+            raise OmaWhatsAppError("Offline mode is on. Go online to re-download voice notes.")
+        result = self._mutate(
+            ["--json", "media", "retry", "--type", "audio",
+             "--limit", str(VOICE_RETRY_LIMIT), "--wait", "30s"],
+            timeout=VOICE_RETRY_SECONDS, require_online=True,
+        )
+        envelope = self._envelope(result)
+        data = envelope.get("data") if isinstance(envelope.get("data"), dict) else {}
+        # Counts only: the per-message outcomes name chats and messages.
+        return {"ok": True, "kind": "voice-retry", **{
+            key: bounded_int(data.get(key), 0, 0, VOICE_RETRY_LIMIT)
+            for key in ("requested", "recovered", "not_on_phone", "no_response", "failed")}}
+
     def refresh_avatars(
         self, authorization: Any, limit: Any = AVATAR_REFRESH_LIMIT
     ) -> dict[str, Any]:
@@ -5957,11 +5985,20 @@ class Backend:
 
         Only through the running sync, which owns the connection: wacli
         refuses these without it, and the sync is never paused for them,
-        because a paused sync loses what arrives meanwhile. The official wacli
-        has no such commands; the answer then says so and the app stops asking.
+        because a paused sync loses what arrives meanwhile. Only the
+        OmaWhatsApp wacli build shows the account online on a lease. Official
+        wacli 0.21+ can subscribe, but WhatsApp answers only a device shown
+        online and our sync stays quiet, so the answer says it is unsupported
+        and the app stops asking.
+
+        Nothing but "unavailable" ever runs while Settings → Show me online is
+        off, whatever the caller asks.
         """
         if action not in ("available", "unavailable", "subscribe"):
             raise OmaWhatsAppError("Choose available, unavailable or subscribe.")
+        if action != "unavailable" \
+                and ui_preference(self._preferences(), "show_online") is not True:
+            return {"ok": True, "skipped": "hidden"}
         if action != "unavailable" and not self.online(self.active):
             return {"ok": True, "skipped": "offline"}
         command = ["--json", "presence", action]
@@ -5975,7 +6012,10 @@ class Backend:
         result = self._run(command, timeout=15)
         if result.returncode != 0:
             detail = f"{result.stderr or ''}\n{result.stdout or ''}"
-            supported = "unknown command" not in detail and "unknown flag" not in detail
+            # Official wacli lacks the lease and, with our quiet sync, never
+            # gets an answer to a subscription.
+            supported = "unknown command" not in detail and "unknown flag" not in detail \
+                and "presence-mode quiet" not in detail
             return {"ok": False, "supported": supported,
                     "error": "wacli could not change presence." if supported
                     else "This wacli build does not follow presence."}
@@ -6519,11 +6559,15 @@ class Backend:
 
         Best effort and only through the running sync: an indicator never
         stops sync or opens a second session, so without one it is skipped.
+        Typing and recording follow Settings → Show me online; "paused" only
+        ever ends an indicator, so it always may go.
         """
         if state not in {"typing", "recording", "paused"}:
             raise OmaWhatsAppError("Typing state must be typing, recording, or paused.")
         chat = self._chat(jid)
-        if not self.online() or not self._sync_active():
+        hidden = state != "paused" \
+            and ui_preference(self._preferences(), "show_online") is not True
+        if hidden or not self.online() or not self._sync_active():
             return {"ok": True, "kind": "chat-presence", "state": state, "sent": False}
         command = ["--json", "presence", "paused" if state == "paused" else "typing",
                    "--to", chat["jid"]]
@@ -8312,6 +8356,7 @@ def parser() -> argparse.ArgumentParser:
     commands.add_parser("self-update")
     commands.add_parser("settings")
     commands.add_parser("avatars")
+    commands.add_parser("retry-voice-notes")
     commands.add_parser("capabilities")
     transport = commands.add_parser("wacli")
     transport.add_argument("--interactive", action="store_true")
@@ -8602,6 +8647,8 @@ def main() -> int:
             return emit(backend.refresh_avatars(
                 payload.get("authorization"), payload.get("limit")
             ))
+        if args.command == "retry-voice-notes":
+            return emit(backend.retry_voice_notes(payload.get("authorization")))
     except OmaWhatsAppPartialError as exc:
         return emit({
             "ok": False,

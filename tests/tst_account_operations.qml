@@ -39,6 +39,24 @@ TestCase {
     verify(!operations.linkBusy)
   }
 
+  function test_voice_note_redownload_reports_what_the_phone_sent() {
+    var operations = createTemporaryObject(operationsComponent, testCase)
+    operations.linkPhase = "running"
+    verify(!operations.retryVoiceNotes("work"), "one sync-pausing operation at a time")
+    operations.linkPhase = "idle"
+    operations.voiceRetryBusy = true
+    operations.finishVoiceRetry(0, JSON.stringify({ ok: true, requested: 5, recovered: 3,
+      not_on_phone: 2, no_response: 0, failed: 0 }), "")
+    verify(!operations.voiceRetryBusy)
+    compare(operations.voiceRetryMessage,
+      "3 of 5 voice notes re-downloaded; 2 are no longer on your phone")
+    operations.finishVoiceRetry(0, JSON.stringify({ ok: true, requested: 0 }), "")
+    compare(operations.voiceRetryMessage, "No voice notes are missing")
+    operations.finishVoiceRetry(1, JSON.stringify({ ok: false,
+      error: "Offline mode is on. Go online to re-download voice notes." }), "")
+    compare(operations.voiceRetryMessage, "Offline mode is on. Go online to re-download voice notes.")
+  }
+
   function test_authenticated_discovery_wins_over_a_late_terminal_exit() {
     var operations = createTemporaryObject(operationsComponent, testCase)
     operations.linkPhase = "running"

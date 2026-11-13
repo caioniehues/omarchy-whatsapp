@@ -1854,6 +1854,7 @@ class BackendTests(unittest.TestCase):
         # The owner asked for online, last seen and typing. Presence is only
         # meaningful on the sync's own connection, so the helper never yields
         # the sync for it: a paused sync loses whatever arrives meanwhile.
+        self.backend.settings({"show_online": True})
         answer = subprocess.CompletedProcess([], 0, json.dumps(
             {"success": True, "data": {"available": True, "until": "2026-09-25T12:01:30Z"}}), "")
         with mock.patch.object(self.backend, "_run", return_value=answer) as run, \
@@ -1879,6 +1880,59 @@ class BackendTests(unittest.TestCase):
                 mock.patch.object(self.backend, "online", return_value=False):
             self.assertEqual(self.backend.presence("available"), {"ok": True, "skipped": "offline"})
         run.assert_not_called()
+
+    def test_presence_never_reaches_wacli_while_show_me_online_is_off(self) -> None:
+        # Off by default: being followed or shown online needs the user's yes.
+        unsupported = subprocess.CompletedProcess([], 1, "", "")
+        with mock.patch.object(self.backend, "_run", return_value=unsupported) as run:
+            for action, jid in (("available", ""), ("subscribe", "alex@s.whatsapp.net")):
+                self.assertEqual(self.backend.presence(action, jid),
+                                 {"ok": True, "skipped": "hidden"})
+            run.assert_not_called()
+            # Going offline is always allowed.
+            self.backend.presence("unavailable")
+            run.assert_called_once()
+        self.backend.settings({"show_online": True})
+        self.backend.settings({"show_online": False})
+        with mock.patch.object(self.backend, "_run") as run:
+            self.assertEqual(self.backend.presence("available")["skipped"], "hidden",
+                             "turning it back off holds again")
+            run.assert_not_called()
+
+    def test_official_wacli_presence_is_reported_unsupported(self) -> None:
+        # Exact answers of the official 0.26.0 binary: no lease flag, and a
+        # subscription delegated to our quiet sync (wacli ErrPresenceQuiet).
+        self.backend.settings({"show_online": True})
+        for output in (
+                '{"success":false,"data":null,"error":"unknown flag: --lease"}',
+                '{"success":false,"data":null,"error":"this sync runs with --presence-mode quiet, '
+                'and WhatsApp sends presence only to devices that show as online"}'):
+            with self.subTest(output=output), mock.patch.object(
+                    self.backend, "_run", return_value=subprocess.CompletedProcess([], 1, output, "")):
+                answer = self.backend.presence("subscribe", "alex@s.whatsapp.net")
+                self.assertEqual(answer["supported"], False)
+                self.assertIn("does not follow presence", answer["error"])
+
+    def test_voice_note_redownload_is_a_bounded_guarded_sync(self) -> None:
+        with mock.patch.object(self.backend, "_mutate") as mutate:
+            with self.assertRaisesRegex(backend_module.OmaWhatsAppError, "authorization='sync'"):
+                self.backend.retry_voice_notes("remote-read")
+            with mock.patch.object(self.backend, "online", return_value=False), \
+                    self.assertRaisesRegex(backend_module.OmaWhatsAppError, "Offline mode"):
+                self.backend.retry_voice_notes("sync")
+            mutate.assert_not_called()
+        answer = subprocess.CompletedProcess([], 0, json.dumps({"success": True, "data": {
+            "requested": 3, "recovered": 2, "not_on_phone": 1, "no_response": 0, "failed": 0,
+            "outcomes": [{"chat_jid": "alex@s.whatsapp.net", "msg_id": "a1", "status": "recovered"}]}}), "")
+        with mock.patch.object(self.backend, "_mutate", return_value=answer) as mutate:
+            result = self.backend.retry_voice_notes("sync")
+        command = mutate.call_args.args[0]
+        self.assertEqual(command[1:3], ["media", "retry"])
+        self.assertEqual(command[command.index("--type") + 1], "audio", "voice notes only")
+        self.assertEqual(command[command.index("--limit") + 1], "96", "never every pending file")
+        self.assertLessEqual(mutate.call_args.kwargs["timeout"], 600)
+        self.assertEqual(result, {"ok": True, "kind": "voice-retry", "requested": 3, "recovered": 2,
+                                  "not_on_phone": 1, "no_response": 0, "failed": 0})
 
     def test_chat_details_are_read_locally_for_a_group(self) -> None:
         with closing(sqlite3.connect(self.store / "wacli.db")) as connection, connection:
@@ -2209,6 +2263,14 @@ class BackendTests(unittest.TestCase):
 
     def test_typing_goes_through_the_running_sync_or_not_at_all(self) -> None:
         completed = subprocess.CompletedProcess([], 0, '{"success":true}', "")
+        # With Show me online off, only "paused" may reach the chat.
+        with mock.patch.object(self.backend, "_sync_active", return_value=True), \
+                mock.patch.object(self.backend, "_run", return_value=completed) as run:
+            self.assertFalse(self.backend.chat_presence("team@g.us", "typing")["sent"])
+            self.assertFalse(self.backend.chat_presence("team@g.us", "recording")["sent"])
+            run.assert_not_called()
+            self.assertTrue(self.backend.chat_presence("team@g.us", "paused")["sent"])
+        self.backend.settings({"show_online": True})
         with mock.patch.object(self.backend, "_sync_active", return_value=True), \
                 mock.patch.object(self.backend, "_run", return_value=completed) as run:
             self.assertTrue(self.backend.chat_presence("team@g.us", "typing")["sent"])

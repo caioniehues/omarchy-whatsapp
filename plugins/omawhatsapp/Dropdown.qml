@@ -314,7 +314,8 @@ Panel {
     return PresenceModel.line(service.presenceSnapshotFor(String(currentChat.account || "")),
       String(currentChat.jid || ""), {
         now: now, date: new Date(now * 1000), group: String(currentChat.kind || "") === "group",
-        names: ({}), clock: TimeFormat.clockPattern(timeFormat, Qt.locale().timeFormat(Locale.ShortFormat))
+        names: ({}), clock: TimeFormat.clockPattern(timeFormat, Qt.locale().timeFormat(Locale.ShortFormat)),
+        unsupported: service.showOnline === true && service.presenceSupported === false
       })
   }
 
